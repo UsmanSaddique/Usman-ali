@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import flask; print\\(f'Flask {flask.__version__} OK'\\)\")",
+      "Bash(timeout 3)",
+      "Bash(curl -s -o NUL -w \"%{http_code}\" http://localhost:5000)",
+      "PowerShell(Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri http://localhost:5000 -UseBasicParsing -ErrorAction Stop; \"Status: $\\($r.StatusCode\\), Length: $\\($r.Content.Length\\)\" } catch { \"Error: $_\" })",
+      "Bash(mkdir -p \"C:\\\\Users\\\\PC\\\\Desktop\\\\VideoMaker\\\\.claude\")",
+      "mcp__Claude_Preview__preview_start",
+      "PowerShell(Stop-Process -Id 10408 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(\"Done\")"
+    ]
+  }
+}
