@@ -1,0 +1,92 @@
+name: Little Fairy Dreams
+audience: kids_under_5_girls
+language: en
+made_for_kids: true
+
+style:
+  color_palette:
+    - "soft pink (#FFB6C1)"
+    - "lavender (#E6E6FA)"
+    - "mint (#98FF98)"
+    - "sky blue (#87CEEB)"
+    - "peach (#FFDAB9)"
+    - "pale gold (#FAFAD2)"
+  visual_style: >-
+    dreamy storybook illustration, watercolor painting, soft focus,
+    magical glow, pastel tones, gentle lighting, whimsical fantasy
+  avoid:
+    - human faces or figures (AI renders them poorly)
+    - readable text in frames
+    - dark or scary imagery
+    - sharp edges or harsh lighting
+    - copyrighted characters
+    - violence or conflict
+    - loud or sudden visual changes
+  prefer:
+    - fairy gardens with glowing flowers
+    - unicorns in meadows
+    - butterflies and fireflies
+    - enchanted castles and towers
+    - rainbows and auroras
+    - magical forests with soft light
+    - sparkling streams and waterfalls
+    - stars and crescent moons
+    - cute woodland creatures (rabbits, deer, foxes)
+    - floating lanterns and bubbles
+
+narration:
+  voice: warm_female
+  pace: slow_gentle     # ~120 words per minute
+  style: minimal        # short narration, more ambient visuals
+  max_words_per_scene: 15
+  silence_between_scenes: 0.5  # seconds
+
+music:
+  style: "soft lullaby, gentle piano, music box melody, wind chimes"
+  tempo_bpm: 65
+  mood: "dreamy, peaceful, magical, wonder"
+  instruments:
+    - piano (soft)
+    - music box
+    - wind chimes
+    - harp
+    - gentle strings
+
+video:
+  target_duration_range: [300, 480]   # 5-8 minutes
+  clip_duration: 5.0                  # seconds per scene
+  still_ratio: 0.40                   # 40% Ken Burns stills, 60% motion
+  transitions: crossfade
+  transition_duration: 0.5
+  fps: 24
+  resolution: 1080p
+
+generation:
+  image_model: sdxl
+  video_model: ltx-2.3
+  upscale_model: realesrgan-x4plus-anime  # anime variant for cartoon look
+  default_negative_prompt: >-
+    blurry, low quality, worst quality, text, watermark, logo,
+    human face, hands, fingers, realistic person, dark, scary,
+    horror, violence, blood, weapon, nsfw, deformed, ugly
+
+monetization:
+  cpm_range_usd: [2.0, 5.0]
+  strategy: autoplay_volume
+  upload_frequency: daily
+  best_upload_times:
+    - "08:00 UTC"   # morning US East
+    - "15:00 UTC"   # after school US
+  tags_template:
+    - fairy tales for kids
+    - bedtime stories
+    - fairy garden
+    - magical stories for toddlers
+    - relaxing videos for kids
+    - unicorn adventure
+    - kids sleep video
+
+thumbnail:
+  style: "bright, colorful, magical, eye-catching, pastel"
+  must_include: "main subject centered, sparkle effects, soft glow"
+  avoid: "text, dark colors, complex compositions"
