@@ -206,32 +206,95 @@ class ModelManager:
 # Each returns a function that creates a LoadedModel.
 
 def create_llm_loader(config) -> Callable[[], LoadedModel]:
-    """Factory for Qwen LLM loader via llama-cpp-python."""
+    """Factory for Qwen LLM loader via Ollama."""
 
     def loader() -> LoadedModel:
-        import torch  # Import torch first so its CUDA DLLs are added to the search path
-        from llama_cpp import Llama
+        class OllamaClient:
+            def __init__(self, model_name, base_url, n_ctx):
+                self.model_name = model_name
+                self.base_url = base_url
+                self.n_ctx = n_ctx
 
-        model = Llama(
-            model_path=str(config.llm.path),
-            n_ctx=config.llm.n_ctx,
-            n_gpu_layers=config.llm.n_gpu_layers,
-            n_batch=config.llm.n_batch,
-            n_threads=config.llm.n_threads,
-            verbose=config.llm.verbose,
-            # Enable chat template for Qwen
-            chat_format="chatml",
-        )
+            def create_chat_completion(self, messages, temperature=0.7, max_tokens=1024, response_format=None):
+                import urllib.request
+                import json
+                
+                url = f"{self.base_url}/api/chat"
+                
+                payload = {
+                    "model": self.model_name,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                        "num_ctx": self.n_ctx
+                    }
+                }
+                if response_format and response_format.get("type") == "json_object":
+                    payload["format"] = "json"
+
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                try:
+                    with urllib.request.urlopen(req) as response:
+                        result = json.loads(response.read().decode('utf-8'))
+                        # map Ollama response to OpenAI style for DirectorService compatibility
+                        return {
+                            "choices": [
+                                {
+                                    "message": result.get("message", {"content": ""})
+                                }
+                            ]
+                        }
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Ollama API Error: {e}")
+                    raise e
+                    
+        client = OllamaClient(config.llm.name, config.llm.base_url, config.llm.n_ctx)
 
         return LoadedModel(
             model_type=ModelType.LLM,
             name=config.llm.name,
-            model=model,
+            model=client,
             extras={},
-            vram_mb=_estimate_gguf_vram(config.llm.path, config.llm.n_gpu_layers),
+            vram_mb=0, # Ollama manages its own VRAM; we free it via unloader
         )
 
     return loader
+
+
+def create_llm_unloader(config) -> Callable[[LoadedModel], None]:
+    """Factory for Ollama unloader to force VRAM release."""
+    
+    def unloader(loaded_model: LoadedModel):
+        import urllib.request
+        import json
+        import logging
+        
+        try:
+            url = f"{config.llm.base_url}/api/generate"
+            payload = {
+                "model": config.llm.name,
+                "keep_alive": 0
+            }
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
+            with urllib.request.urlopen(req) as response:
+                pass
+            logging.getLogger(__name__).info("[Ollama] Sent keep_alive=0 to free VRAM.")
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"[Ollama] Failed to free VRAM: {e}")
+            
+    return unloader
 
 
 def create_image_gen_loader(config) -> Callable[[], LoadedModel]:
@@ -378,7 +441,7 @@ def _estimate_gguf_vram(model_path, n_gpu_layers: int) -> int:
 
 def register_all_loaders(manager: ModelManager, config):
     """Register all model loaders with the manager."""
-    manager.register_loader(ModelType.LLM, create_llm_loader(config))
+    manager.register_loader(ModelType.LLM, create_llm_loader(config), create_llm_unloader(config))
     manager.register_loader(ModelType.IMAGE_GEN, create_image_gen_loader(config))
     manager.register_loader(ModelType.VIDEO_GEN, create_video_gen_loader(config))
     manager.register_loader(ModelType.UPSCALER, create_upscaler_loader(config))
