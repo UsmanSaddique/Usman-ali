@@ -28,12 +28,14 @@ class PathConfig(BaseModel):
 # ── Model Definitions ──────────────────────────────────────────────────────
 
 class LLMModelConfig(BaseModel):
-    """Director brain via Ollama."""
+    """Director brain via Ollama or llama-cpp-python."""
     name: str = "qwen2.5:32b"    # Make sure to run `ollama run qwen2.5:32b` or update this
     base_url: str = "http://localhost:11434"
     temperature: float = 0.7
     max_tokens: int = 4096
     n_ctx: int = 8192            # Passed as num_ctx to Ollama
+    model_path: Optional[Path] = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\Qwen3.6-27B-Q3_K_S.gguf")
+    n_gpu_layers: int = -1       # -1 means offload all layers to GPU
 
 
 class ImageModelConfig(BaseModel):

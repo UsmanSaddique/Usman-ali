@@ -102,6 +102,7 @@ class Project(Base):
     channel_id = Column(String, ForeignKey("channels.id"), nullable=False)
     duration_target = Column(Integer, nullable=False)  # seconds
     context = Column(Text)              # user-provided context/notes
+    num_scenes_target = Column(Integer, nullable=True) # user-customized target scene count
     script_raw = Column(Text)           # raw LLM output
     status = Column(SAEnum(ProjectStatus), default=ProjectStatus.DRAFT)
     total_scenes = Column(Integer, default=0)

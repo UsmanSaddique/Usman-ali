@@ -206,9 +206,38 @@ class ModelManager:
 # Each returns a function that creates a LoadedModel.
 
 def create_llm_loader(config) -> Callable[[], LoadedModel]:
-    """Factory for Qwen LLM loader via Ollama."""
+    """Factory for Qwen LLM loader. Uses direct llama-cpp-python if local GGUF path is configured and exists; otherwise falls back to Ollama."""
 
     def loader() -> LoadedModel:
+        import os
+        model_path = getattr(config.llm, "model_path", None)
+        if model_path and os.path.exists(model_path):
+            logger.info(f"[ModelManager] Loading local GGUF model from {model_path} via llama-cpp-python...")
+            try:
+                from llama_cpp import Llama
+                
+                n_gpu_layers = getattr(config.llm, "n_gpu_layers", -1)
+                n_ctx = getattr(config.llm, "n_ctx", 8192)
+                
+                llm = Llama(
+                    model_path=str(model_path),
+                    n_ctx=n_ctx,
+                    n_gpu_layers=n_gpu_layers,
+                    verbose=False
+                )
+                
+                vram_est = _estimate_gguf_vram(model_path, n_gpu_layers if n_gpu_layers >= 0 else 64)
+                
+                return LoadedModel(
+                    model_type=ModelType.LLM,
+                    name=os.path.basename(model_path),
+                    model=llm,
+                    extras={"local_gguf": True},
+                    vram_mb=vram_est,
+                )
+            except Exception as e:
+                logger.error(f"[ModelManager] Failed to load local GGUF: {e}. Falling back to Ollama.")
+
         class OllamaClient:
             def __init__(self, model_name, base_url, n_ctx):
                 self.model_name = model_name
@@ -273,6 +302,10 @@ def create_llm_unloader(config) -> Callable[[LoadedModel], None]:
     """Factory for Ollama unloader to force VRAM release."""
     
     def unloader(loaded_model: LoadedModel):
+        if loaded_model.extras.get("local_gguf"):
+            logger.info("[ModelManager] Local GGUF model unloaded.")
+            return
+
         import urllib.request
         import json
         import logging

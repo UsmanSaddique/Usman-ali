@@ -152,6 +152,7 @@ class PipelineOrchestrator:
                 context=project.context or "",
                 channel_slug=channel.slug,
                 available_loras=lora_dicts if lora_dicts else None,
+                num_scenes=project.num_scenes_target,
             )
 
             # Unload LLM to free VRAM

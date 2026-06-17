@@ -120,6 +120,7 @@ class CreateProjectReq(BaseModel):
     channel_slug: str
     duration: int  # seconds
     context: str = ""
+    num_scenes: Optional[int] = None
 
 class UpdateSceneReq(BaseModel):
     prompt: Optional[str] = None
@@ -158,6 +159,7 @@ def create_project(req: CreateProjectReq, db: Session = Depends(get_db)):
         channel_id=channel.id,
         duration_target=req.duration,
         context=req.context,
+        num_scenes_target=req.num_scenes,
     )
     db.add(project)
     db.commit()

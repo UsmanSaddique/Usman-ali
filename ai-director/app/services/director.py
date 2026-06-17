@@ -167,6 +167,7 @@ class DirectorService:
         context: str,
         channel_slug: str,
         available_loras: Optional[list[dict]] = None,
+        num_scenes: Optional[int] = None,
     ) -> VideoScript:
         """
         Generate a complete video scene breakdown.
@@ -179,6 +180,13 @@ class DirectorService:
 
         system_prompt = self.build_system_prompt(channel_slug)
 
+        # Calculate the number of scenes needed
+        if not num_scenes or num_scenes <= 0:
+            num_scenes = duration // 5
+            avg_duration_str = "approximately 5 seconds"
+        else:
+            avg_duration_str = f"exactly {duration / num_scenes:.1f} seconds"
+
         # Build user message
         user_msg = f"""Plan a YouTube video with these specifications:
 
@@ -187,8 +195,8 @@ class DirectorService:
 **Context/Notes:** {context}
 
 Calculate the number of scenes needed:
-- Average clip duration: 5 seconds
-- Total clips needed: approximately {duration // 5}
+- Average clip duration: {avg_duration_str}
+- Total clips needed: exactly {num_scenes}
 - Mix of scene types based on channel profile's still_ratio
 
 Generate the complete scene list as JSON."""

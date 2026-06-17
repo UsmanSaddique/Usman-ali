@@ -294,7 +294,12 @@ tr { cursor: pointer; }
           </div>
           <div class="form-group">
             <label>Duration (minutes)</label>
-            <input type="number" id="new-duration" value="5" min="1" max="30">
+            <input type="number" id="new-duration" value="5" min="1" max="30" oninput="updateAvgSceneDuration()">
+          </div>
+          <div class="form-group">
+            <label>Number of Scenes (Script Length)</label>
+            <input type="number" id="new-num-scenes" value="12" min="1" max="100" oninput="updateAvgSceneDuration()">
+            <span id="avg-duration-hint" class="text-dim text-sm" style="margin-top: 4px; font-size: 0.75rem;">Avg clip duration: ~25.0s</span>
           </div>
           <div class="form-group full">
             <label>Context / Notes (optional)</label>
@@ -473,7 +478,10 @@ function showPage(page) {
   if (page === 'dashboard') loadProjects();
   if (page === 'channels') loadChannels();
   if (page === 'loras') loadLoRAs();
-  if (page === 'new-project') loadChannelsDropdown();
+  if (page === 'new-project') {
+    loadChannelsDropdown();
+    updateAvgSceneDuration();
+  }
 }
 
 // ── API Helpers ────────────────────────────────────────────────
@@ -633,14 +641,26 @@ async function createProject() {
   const title = document.getElementById('new-title').value.trim();
   const channel = document.getElementById('new-channel').value;
   const duration = parseInt(document.getElementById('new-duration').value) * 60;
+  const numScenes = parseInt(document.getElementById('new-num-scenes').value) || 12;
   const context = document.getElementById('new-context').value;
   if (!title) { alert('Enter a title'); return; }
   try {
     const result = await api('/api/projects', 'POST', {
-      title, channel_slug: channel, duration, context
+      title, channel_slug: channel, duration, context, num_scenes: numScenes
     });
     openProject(result.id);
   } catch(e) { alert('Error: ' + e.message); }
+}
+
+function updateAvgSceneDuration() {
+  const durationMin = parseFloat(document.getElementById('new-duration').value) || 5;
+  const numScenes = parseInt(document.getElementById('new-num-scenes').value) || 12;
+  const durationSec = durationMin * 60;
+  const avgSec = durationSec / numScenes;
+  const hintEl = document.getElementById('avg-duration-hint');
+  if (hintEl) {
+    hintEl.textContent = `Avg clip duration: ~${avgSec.toFixed(1)}s`;
+  }
 }
 
 // ── Scene Management ───────────────────────────────────────────
