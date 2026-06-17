@@ -69,10 +69,21 @@ class VideoGenService:
             output_path = str(cfg.output_dir / f"vid_{seed}.mp4")
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Check if we're in subprocess mode
+        # Load model and check which engine we got
         loaded = self.manager.load(ModelType.VIDEO_GEN)
+        engine = loaded.extras.get("engine", "")
 
-        if loaded.extras.get("subprocess_mode"):
+        if engine == "wan2.2":
+            return self._generate_wan22(
+                pipeline=loaded.model,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width, height=height,
+                num_frames=num_frames, fps=fps,
+                steps=steps, cfg_scale=cfg_scale,
+                seed=seed, output_path=output_path,
+            )
+        elif loaded.extras.get("subprocess_mode"):
             return self._generate_subprocess(
                 mode="txt2vid",
                 prompt=prompt,
@@ -82,18 +93,18 @@ class VideoGenService:
                 steps=steps, cfg_scale=cfg_scale,
                 seed=seed, output_path=output_path,
             )
-
-        # Direct pipeline mode
-        return self._generate_direct(
-            pipeline=loaded.model,
-            mode="txt2vid",
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            width=width, height=height,
-            num_frames=num_frames, fps=fps,
-            steps=steps, cfg_scale=cfg_scale,
-            seed=seed, output_path=output_path,
-        )
+        else:
+            # Direct LTX pipeline mode
+            return self._generate_direct(
+                pipeline=loaded.model,
+                mode="txt2vid",
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width, height=height,
+                num_frames=num_frames, fps=fps,
+                steps=steps, cfg_scale=cfg_scale,
+                seed=seed, output_path=output_path,
+            )
 
     def img2vid(
         self,
@@ -268,6 +279,114 @@ class VideoGenService:
             prompt_used=prompt,
             model_used="ltx-2.3-distilled",
         )
+
+    # ── Internal: Wan2.2 via Diffusers ─────────────────────────────────
+
+    def _generate_wan22(
+        self, pipeline, prompt: str, negative_prompt: str,
+        width: int, height: int, num_frames: int, fps: int,
+        steps: int, cfg_scale: float, seed: int, output_path: str,
+    ) -> VideoResult:
+        """Generate using Wan2.2 diffusers pipeline."""
+        import torch
+
+        # Use Wan2.2 defaults if the LTX defaults were used
+        wan_cfg = self.config.video_alt
+        width = wan_cfg.default_width
+        height = wan_cfg.default_height
+        fps = wan_cfg.default_fps
+        steps = wan_cfg.default_steps
+        cfg_scale = wan_cfg.default_cfg
+        # Limit frames to avoid OOM on 16GB (81 frames = ~5s at 16fps)
+        num_frames = min(num_frames, wan_cfg.default_num_frames)
+
+        t0 = time.time()
+        logger.info(
+            f"[VideoGen] Wan2.2 txt2vid: {width}x{height}, {num_frames}f, "
+            f"steps={steps}, cfg={cfg_scale}, seed={seed}"
+        )
+
+        generator = torch.Generator(device="cuda").manual_seed(seed)
+
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+            result = pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt or "blurry, low quality, distorted",
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                num_inference_steps=steps,
+                guidance_scale=cfg_scale,
+                generator=generator,
+            )
+
+        # Export frames to MP4
+        frames = result.frames[0]  # list of PIL images or tensor
+        self._frames_to_mp4(frames, output_path, fps)
+
+        elapsed = time.time() - t0
+        logger.info(f"[VideoGen] Wan2.2 generated in {elapsed:.1f}s → {output_path}")
+
+        return VideoResult(
+            path=output_path,
+            width=width, height=height,
+            num_frames=num_frames, fps=fps,
+            duration=num_frames / fps,
+            seed=seed,
+            generation_time=elapsed,
+            prompt_used=prompt,
+            model_used="wan2.2-14B-fp8",
+        )
+
+    @staticmethod
+    def _frames_to_mp4(frames, output_path: str, fps: int):
+        """Convert a list of PIL Images or tensor to MP4 using ffmpeg."""
+        import subprocess as sp
+        from PIL import Image
+        import struct
+
+        # frames could be PIL images or a tensor
+        if hasattr(frames, 'shape'):
+            # It's a tensor — convert to PIL
+            import torch
+            if frames.dim() == 4:  # (T, C, H, W) or (T, H, W, C)
+                pil_frames = []
+                for i in range(frames.shape[0]):
+                    f = frames[i]
+                    if f.shape[0] in (3, 4):  # C, H, W
+                        f = f.permute(1, 2, 0)
+                    f = (f.clamp(0, 1) * 255).byte().cpu().numpy()
+                    pil_frames.append(Image.fromarray(f))
+                frames = pil_frames
+        
+        if not frames:
+            raise ValueError("No frames to encode")
+
+        w, h = frames[0].size
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{w}x{h}",
+            "-pix_fmt", "rgb24",
+            "-r", str(fps),
+            "-i", "-",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            output_path,
+        ]
+
+        proc = sp.Popen(cmd, stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+        for frame in frames:
+            proc.stdin.write(frame.convert("RGB").tobytes())
+        proc.stdin.close()
+        proc.wait()
+
+        if proc.returncode != 0:
+            stderr = proc.stderr.read().decode()
+            raise RuntimeError(f"ffmpeg encoding failed: {stderr[-500:]}")
 
     # ── Internal: Subprocess Mode ──────────────────────────────────────
 

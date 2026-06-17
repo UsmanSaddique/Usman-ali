@@ -323,6 +323,52 @@ tr { cursor: pointer; }
         <div class="btn-group" id="project-actions"></div>
       </div>
 
+      <!-- Project Config / Details section -->
+      <div class="card" id="project-details-card">
+        <h3 class="flex-between">
+          <span>Project Configuration</span>
+          <button class="btn-outline btn-sm hidden" id="edit-project-btn" onclick="toggleEditProject(true)">Edit Details</button>
+        </h3>
+        <!-- View Mode -->
+        <div id="project-details-view" class="mt-8">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Target Duration</label>
+              <div id="view-duration" class="text-sm font-semibold">—</div>
+            </div>
+            <div class="form-group">
+              <label>Target Scene Count</label>
+              <div id="view-num-scenes" class="text-sm font-semibold">—</div>
+            </div>
+            <div class="form-group full">
+              <label>Context / Creative Notes</label>
+              <div id="view-context" class="text-sm text-dim" style="white-space: pre-wrap;">—</div>
+            </div>
+          </div>
+        </div>
+        <!-- Edit Mode -->
+        <div id="project-details-edit" class="mt-8 hidden">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Target Duration (minutes)</label>
+              <input type="number" id="edit-duration-input" min="1" max="30">
+            </div>
+            <div class="form-group">
+              <label>Number of Scenes</label>
+              <input type="number" id="edit-num-scenes-input" min="1" max="100">
+            </div>
+            <div class="form-group full">
+              <label>Context / Creative Notes</label>
+              <textarea id="edit-context-input" placeholder="Creative guidelines for the script..."></textarea>
+            </div>
+          </div>
+          <div class="btn-group mt-16">
+            <button class="btn-success btn-sm" onclick="saveProjectDetails()">Save Changes</button>
+            <button class="btn-outline btn-sm" onclick="toggleEditProject(false)">Cancel</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Progress section -->
       <div id="project-progress" class="card hidden">
         <div class="monitor-box">
@@ -338,6 +384,15 @@ tr { cursor: pointer; }
             <div class="progress-bar-inner" id="proj-bar" style="width:0%"></div>
           </div>
         </div>
+      </div>
+
+      <!-- Live Pipeline Logs Monitor -->
+      <div class="card mt-16 hidden" id="project-logs-card">
+        <h3 class="flex-between">
+          <span>Live Console Output</span>
+          <button class="btn-outline btn-sm" onclick="clearProjectLogs()">Clear</button>
+        </h3>
+        <div id="project-log-box" style="max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; color: var(--text-dim); padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); margin-top: 8px;"></div>
       </div>
 
       <!-- Scenes -->
@@ -459,6 +514,70 @@ const API = '';  // same origin
 let currentProject = null;
 let currentSceneId = null;
 let ws = null;
+let _pollTimer = null;
+
+function startProjectPolling(projectId) {
+  stopProjectPolling();
+  _pollTimer = setInterval(async () => {
+    if (!currentProject) return;
+    try {
+      const p = await api(`/api/projects/${projectId}`);
+      const wasRunning = ['generating','upscaling','assembling','music','scripting'].includes(currentProject.status);
+      const isRunning = ['generating','upscaling','assembling','music','scripting'].includes(p.status);
+      currentProject = p;
+      // Update scenes and actions without full re-render of logs
+      renderProjectSilent();
+      if (!isRunning && wasRunning) stopProjectPolling();
+    } catch(e) {}
+  }, 5000);
+}
+
+function stopProjectPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+function renderProjectSilent() {
+  // Update project actions + status without clearing logs
+  const p = currentProject;
+  document.getElementById('project-title').textContent = p.title;
+  document.getElementById('project-meta').textContent =
+    `${p.channel?.name || '—'} · ${Math.round(p.duration_target/60)}min · ${p.status}`;
+  const actions = document.getElementById('project-actions');
+  let btns = '';
+  switch(p.status) {
+    case 'draft':
+      btns = `<button class="btn-primary" onclick="pipelineAction('generate-script')">Generate Script</button>`;
+      break;
+    case 'scripted':
+      btns = `<button class="btn-success" onclick="pipelineAction('approve-script')">Approve Script</button>
+              <button class="btn-outline" onclick="pipelineAction('generate-script')">Regenerate</button>`;
+      break;
+    case 'approved':
+      btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Start Generation</button>
+              <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
+      break;
+    case 'generating': case 'upscaling': case 'assembling': case 'music': case 'scripting':
+      btns = `<button class="btn-danger" onclick="cancelPipeline()">Cancel</button>`;
+      break;
+    case 'generated':
+      btns = `<button class="btn-primary" onclick="pipelineAction('start-upscale')">Upscale</button>
+              <button class="btn-success" onclick="pipelineAction('render')">Assemble &amp; Render</button>
+              <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
+      break;
+    case 'rendered':
+      btns = `<button class="btn-success">Download</button>`;
+      break;
+    case 'failed':
+      btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume Generation</button>
+              <button class="btn-outline" onclick="pipelineAction('generate-script')">Regenerate Script</button>
+              <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
+      break;
+    default:
+      btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume</button>
+              <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
+  }
+  actions.innerHTML = btns;
+}
 
 // ── Navigation ─────────────────────────────────────────────────
 document.querySelectorAll('.nav-item[data-page]').forEach(el => {
@@ -560,6 +679,30 @@ function renderProject() {
   document.getElementById('project-meta').textContent =
     `${p.channel?.name || '—'} · ${Math.round(p.duration_target/60)}min · ${p.status}`;
 
+  // Populate details card
+  document.getElementById('view-duration').textContent = `${Math.round(p.duration_target / 60)} minutes (${p.duration_target}s)`;
+  document.getElementById('view-num-scenes').textContent = p.num_scenes_target || 'Auto (Default)';
+  document.getElementById('view-context').textContent = p.context || 'None';
+
+  // Toggle Edit button visibility - only in draft or scripted status
+  const editBtn = document.getElementById('edit-project-btn');
+  if (editBtn) {
+    if (['draft', 'scripted'].includes(p.status)) {
+      editBtn.classList.remove('hidden');
+    } else {
+      editBtn.classList.add('hidden');
+    }
+  }
+
+  // Set inputs for edit mode
+  document.getElementById('edit-duration-input').value = Math.round(p.duration_target / 60);
+  document.getElementById('edit-num-scenes-input').value = p.num_scenes_target || 12;
+  document.getElementById('edit-context-input').value = p.context || '';
+
+  // Show log card if pipeline is active, was active, failed, or done
+  const showLogs = ['generating','upscaling','assembling','music','scripting','failed','rendered'].includes(p.status);
+  document.getElementById('project-logs-card').classList.toggle('hidden', !showLogs);
+
   // Actions based on status
   const actions = document.getElementById('project-actions');
   let btns = '';
@@ -575,14 +718,21 @@ function renderProject() {
       btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Start Generation</button>
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
-    case 'generating':
+    case 'generating': case 'upscaling': case 'assembling': case 'music': case 'scripting':
       btns = `<button class="btn-danger" onclick="cancelPipeline()">Cancel</button>`;
       break;
-    case 'generated': case 'upscaling':
-      btns = `<button class="btn-primary" onclick="pipelineAction('start-upscale')">Upscale</button>`;
+    case 'generated':
+      btns = `<button class="btn-primary" onclick="pipelineAction('start-upscale')">Upscale</button>
+              <button class="btn-success" onclick="pipelineAction('render')">Assemble & Render</button>
+              <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     case 'rendered':
       btns = `<button class="btn-success">Download</button>`;
+      break;
+    case 'failed':
+      btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume Generation</button>
+              <button class="btn-outline" onclick="pipelineAction('generate-script')">Regenerate Script</button>
+              <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     default:
       btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume</button>
@@ -591,8 +741,12 @@ function renderProject() {
   actions.innerHTML = btns;
 
   // Show/hide progress
-  const isRunning = ['generating','upscaling','assembling','music'].includes(p.status);
-  document.getElementById('project-progress').classList.toggle('hidden', !isRunning);
+  const isProgressRunning = ['generating','upscaling','assembling','music','scripting'].includes(p.status);
+  document.getElementById('project-progress').classList.toggle('hidden', !isProgressRunning);
+
+  // Start polling if pipeline is running
+  if (isProgressRunning) startProjectPolling(p.id);
+  else stopProjectPolling();
 
   // Scenes
   document.getElementById('scene-count').textContent =
@@ -721,7 +875,11 @@ function connectWS(projectId) {
   ws = new WebSocket(`${proto}://${location.host}/ws/pipeline/${projectId}`);
   ws.onmessage = (e) => {
     const data = JSON.parse(e.data);
-    if (data.type === 'progress') updateProgress(data);
+    if (data.type === 'progress') {
+      updateProgress(data);
+    } else if (data.type === 'log') {
+      appendLog(data.message);
+    }
   };
   ws.onerror = () => console.warn('WebSocket error');
   ws.onclose = () => console.log('WebSocket closed');
@@ -746,7 +904,10 @@ function updateProgress(data) {
     }
   });
   // Show progress card
-  document.getElementById('project-progress')?.classList.remove('hidden');
+  const isProgressRunning = ['generating','upscaling','assembling','music','scripting'].includes(data.phase);
+  document.getElementById('project-progress')?.classList.toggle('hidden', !isProgressRunning);
+  // Always show log card when receiving progress
+  document.getElementById('project-logs-card')?.classList.remove('hidden');
   // Log
   const log = document.getElementById('pipeline-log');
   if (log) {
@@ -754,8 +915,9 @@ function updateProgress(data) {
     log.innerHTML += `<div>[${ts}] ${esc(data.message || data.phase)}</div>`;
     log.scrollTop = log.scrollHeight;
   }
-  // Auto-refresh on done
+  // Auto-refresh on done/error
   if (data.phase === 'done' || data.phase === 'error') {
+    stopProjectPolling();
     setTimeout(() => { if (currentProject) openProject(currentProject.id); }, 1500);
   }
 }
@@ -822,6 +984,52 @@ function statusBadge(status) {
   };
   const cls = map[status] || 'draft';
   return `<span class="badge badge-${cls}">${status}</span>`;
+}
+
+function toggleEditProject(editMode) {
+  document.getElementById('project-details-view').classList.toggle('hidden', editMode);
+  document.getElementById('project-details-edit').classList.toggle('hidden', !editMode);
+}
+
+async function saveProjectDetails() {
+  const duration = parseInt(document.getElementById('edit-duration-input').value) * 60;
+  const numScenes = parseInt(document.getElementById('edit-num-scenes-input').value) || 12;
+  const context = document.getElementById('edit-context-input').value;
+  
+  try {
+    await api(`/api/projects/${currentProject.id}`, 'PUT', {
+      duration,
+      num_scenes: numScenes,
+      context
+    });
+    toggleEditProject(false);
+    openProject(currentProject.id);
+  } catch(e) {
+    alert('Error saving project: ' + e.message);
+  }
+}
+
+function clearProjectLogs() {
+  const log = document.getElementById('project-log-box');
+  if (log) log.innerHTML = '';
+}
+
+function appendLog(msg) {
+  const formatMsg = `<div style="white-space: pre-wrap; margin-bottom: 2px;">${esc(msg)}</div>`;
+  
+  const log = document.getElementById('pipeline-log');
+  if (log) {
+    log.innerHTML += formatMsg;
+    if (log.childElementCount > 500) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+  }
+  
+  const projLog = document.getElementById('project-log-box');
+  if (projLog) {
+    projLog.innerHTML += formatMsg;
+    if (projLog.childElementCount > 500) projLog.removeChild(projLog.firstChild);
+    projLog.scrollTop = projLog.scrollHeight;
+  }
 }
 
 // ── Init ───────────────────────────────────────────────────────

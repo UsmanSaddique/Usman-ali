@@ -86,7 +86,7 @@ class ImageGenService:
         t0 = time.time()
         logger.info(f"[ImageGen] Generating {width}x{height}, steps={steps}, cfg={cfg_scale}")
 
-        with torch.inference_mode():
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
             result = pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt or self._default_negative(),

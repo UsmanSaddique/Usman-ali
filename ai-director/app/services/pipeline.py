@@ -3,6 +3,7 @@ AI Director — Pipeline Orchestrator
 Coordinates the full video generation workflow across all services.
 Manages state transitions, error handling, retries, and progress reporting.
 """
+import os
 import time
 import logging
 import asyncio
@@ -197,7 +198,44 @@ class PipelineOrchestrator:
 
             return script
 
+        except PipelineCancelled as ce:
+            logger.info(f"[Pipeline] Scripting cancelled: {ce}")
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = "Scripting cancelled by user"
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on cancel: {dbe}")
+            
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error="Cancelled",
+                message="Scripting cancelled by user",
+            )
+            raise
+
+        except Exception as e:
+            logger.error(f"[Pipeline] Scripting failed: {e}", exc_info=True)
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = str(e)
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on error: {dbe}")
+            
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error=str(e),
+                message=f"Scripting failed: {e}",
+            )
+            raise
+
         finally:
+            self.manager.unload()
             session.close()
 
     # ── Phase 2: TTS Generation ──────────────────────────────────
@@ -206,6 +244,7 @@ class PipelineOrchestrator:
         """
         Generate narration audio for all scenes with narration_text.
         Returns the combined narration audio path, or None if no narration.
+        Gracefully returns None if TTS server is unavailable.
         """
         session = get_session()
         try:
@@ -223,6 +262,14 @@ class PipelineOrchestrator:
             has_narration = any(d["narration_text"].strip() for d in scene_dicts)
             if not has_narration:
                 logger.info("[Pipeline] No narration text in any scene, skipping TTS")
+                return None
+
+            # Quick check: is the TTS server reachable?
+            try:
+                import httpx
+                httpx.get(self.config.tts.api_url, timeout=3.0)
+            except Exception:
+                logger.warning("[Pipeline] TTS server not reachable at %s, skipping narration", self.config.tts.api_url)
                 return None
 
             self._emit_progress(
@@ -245,6 +292,10 @@ class PipelineOrchestrator:
             )
 
             return combined_path
+
+        except Exception as e:
+            logger.warning(f"[Pipeline] TTS generation failed (non-fatal): {e}")
+            return None
 
         finally:
             session.close()
@@ -309,7 +360,8 @@ class PipelineOrchestrator:
                     scene.status = SceneStatus.FAILED
                     scene.retry_count += 1
 
-                    # Try retry with director advice
+                    # Check cancel before starting slow director advice retry
+                    self._check_cancel()
                     if scene.retry_count <= scene.max_retries:
                         try:
                             self._retry_scene(scene, str(e), clips_dir, images_dir, session)
@@ -338,19 +390,60 @@ class PipelineOrchestrator:
             ).count()
 
             if failed_count == 0:
-                project.status = ProjectStatus.APPROVED
+                project.status = ProjectStatus.GENERATED
+                self._emit_progress(
+                    phase=PipelinePhase.IDLE,
+                    message=f"Generation complete. Ready for upscaling.",
+                    percent=100.0,
+                )
             else:
-                project.status = ProjectStatus.GENERATING  # needs review
+                project.status = ProjectStatus.FAILED
+                self._emit_progress(
+                    phase=PipelinePhase.ERROR,
+                    error="Failed scenes",
+                    message=f"Generation stopped. {failed_count} scenes failed.",
+                )
 
             session.commit()
 
+        except PipelineCancelled as ce:
+            logger.info(f"[Pipeline] Generation cancelled: {ce}")
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = "Generation cancelled by user"
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on cancel: {dbe}")
+            
             self._emit_progress(
-                phase=PipelinePhase.IDLE,
-                message=f"Generation complete. {failed_count} scenes need attention.",
-                percent=100.0,
+                phase=PipelinePhase.ERROR,
+                error="Cancelled",
+                message="Generation cancelled by user",
             )
+            raise
+
+        except Exception as e:
+            logger.error(f"[Pipeline] Generation failed: {e}", exc_info=True)
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = str(e)
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on error: {dbe}")
+            
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error=str(e),
+                message=f"Generation failed: {e}",
+            )
+            raise
 
         finally:
+            self.manager.unload()
             session.close()
 
     def _generate_scene(
@@ -369,12 +462,15 @@ class PipelineOrchestrator:
         session.add(gen)
         session.flush()  # get gen.id
 
+        # Check if SDXL is available for image-based scene types
+        sdxl_path = str(self.config.image.path)
+        sdxl_available = sdxl_path and os.path.exists(sdxl_path)
+
         try:
             if scene.scene_type == SceneType.TXT2VID:
                 result = self.video_gen.txt2vid(
                     prompt=scene.prompt,
                     negative_prompt=scene.negative_prompt,
-                    duration=scene.duration,
                     num_frames=int(scene.duration * self.config.video.default_fps),
                     output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                 )
@@ -388,76 +484,101 @@ class PipelineOrchestrator:
                 }
 
             elif scene.scene_type == SceneType.IMG2VID:
-                # Step 1: Generate base image
-                img_result = self.image_gen.generate(
-                    prompt=scene.prompt,
-                    negative_prompt=scene.negative_prompt,
-                    output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
-                    lora_paths=scene.lora_ids,
-                    lora_weights=scene.lora_weights,
-                )
-                # Unload SDXL, load LTX
-                self.manager.unload()
+                if not sdxl_available:
+                    # Fallback: use txt2vid with Wan2.2 instead
+                    logger.warning(f"[Pipeline] Scene {scene.scene_number}: SDXL not available, falling back to txt2vid")
+                    result = self.video_gen.txt2vid(
+                        prompt=scene.prompt,
+                        negative_prompt=scene.negative_prompt,
+                        num_frames=int(scene.duration * self.config.video.default_fps),
+                        output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                    )
+                    gen.model_used = f"txt2vid-fallback:{result.model_used}"
+                else:
+                    # Step 1: Generate base image with SDXL
+                    img_result = self.image_gen.generate(
+                        prompt=scene.prompt,
+                        negative_prompt=scene.negative_prompt,
+                        output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
+                        lora_paths=scene.lora_ids,
+                        lora_weights=scene.lora_weights,
+                    )
+                    self.manager.unload()
 
-                # Step 2: Animate the image
-                result = self.video_gen.img2vid(
-                    prompt=scene.prompt,
-                    image_path=img_result.path,
-                    negative_prompt=scene.negative_prompt,
-                    num_frames=int(scene.duration * self.config.video.default_fps),
-                    output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
-                )
-                gen.model_used = f"sdxl+{result.model_used}"
+                    # Step 2: Animate the image
+                    result = self.video_gen.img2vid(
+                        prompt=scene.prompt,
+                        image_path=img_result.path,
+                        negative_prompt=scene.negative_prompt,
+                        num_frames=int(scene.duration * self.config.video.default_fps),
+                        output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                    )
+                    gen.model_used = f"sdxl+{result.model_used}"
+                    gen.thumbnail_path = img_result.path
+                    gen.generation_time_sec = img_result.generation_time + result.generation_time
+
                 gen.output_path = result.path
                 gen.seed = result.seed
-                gen.generation_time_sec = img_result.generation_time + result.generation_time
-                gen.thumbnail_path = img_result.path
+                if not hasattr(gen, 'generation_time_sec') or not gen.generation_time_sec:
+                    gen.generation_time_sec = result.generation_time
 
             elif scene.scene_type == SceneType.STILL_PAN:
-                # Step 1: Generate high-quality still
-                img_result = self.image_gen.generate(
-                    prompt=scene.prompt,
-                    negative_prompt=scene.negative_prompt,
-                    width=1280,
-                    height=720,
-                    steps=35,  # higher quality for stills
-                    output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
-                    lora_paths=scene.lora_ids,
-                    lora_weights=scene.lora_weights,
-                )
-                # Unload SDXL (Ken Burns is CPU-only)
-                self.manager.unload()
+                if not sdxl_available:
+                    # Fallback: use txt2vid with Wan2.2 — no Ken Burns possible without image
+                    logger.warning(f"[Pipeline] Scene {scene.scene_number}: SDXL not available, falling back to txt2vid for still_pan")
+                    result = self.video_gen.txt2vid(
+                        prompt=scene.prompt,
+                        negative_prompt=scene.negative_prompt,
+                        num_frames=int(scene.duration * self.config.video.default_fps),
+                        output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                    )
+                    gen.model_used = f"txt2vid-fallback:{result.model_used}"
+                    gen.output_path = result.path
+                    gen.seed = result.seed
+                    gen.generation_time_sec = result.generation_time
+                else:
+                    # Step 1: Generate high-quality still with SDXL
+                    img_result = self.image_gen.generate(
+                        prompt=scene.prompt,
+                        negative_prompt=scene.negative_prompt,
+                        width=1280,
+                        height=720,
+                        steps=35,
+                        output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
+                        lora_paths=scene.lora_ids,
+                        lora_weights=scene.lora_weights,
+                    )
+                    self.manager.unload()
 
-                # Step 2: Apply Ken Burns
-                motion = scene.camera_motion or "zoom_in"
-                zoom_start, zoom_end = 1.0, 1.15
-                pan_x, pan_y = 0.0, 0.0
+                    # Step 2: Apply Ken Burns
+                    motion = scene.camera_motion or "zoom_in"
+                    zoom_start, zoom_end = 1.0, 1.15
+                    pan_x, pan_y = 0.0, 0.0
+                    if motion == "zoom_out":
+                        zoom_start, zoom_end = 1.15, 1.0
+                    elif motion == "pan_left":
+                        pan_x = -0.1
+                    elif motion == "pan_right":
+                        pan_x = 0.1
+                    elif motion == "tilt_up":
+                        pan_y = -0.08
 
-                if motion == "zoom_out":
-                    zoom_start, zoom_end = 1.15, 1.0
-                elif motion == "pan_left":
-                    pan_x = -0.1
-                elif motion == "pan_right":
-                    pan_x = 0.1
-                elif motion == "tilt_up":
-                    pan_y = -0.08
-
-                result = self.video_gen.ken_burns(
-                    image_path=img_result.path,
-                    output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
-                    duration=scene.duration,
-                    fps=self.config.video.default_fps,
-                    zoom_start=zoom_start,
-                    zoom_end=zoom_end,
-                    pan_x=pan_x,
-                    pan_y=pan_y,
-                    ffmpeg_bin=self.config.paths.ffmpeg_bin,
-                )
-                gen.model_used = "sdxl+kenburns"
-                gen.output_path = result.path
-                gen.seed = img_result.seed
-                gen.generation_time_sec = img_result.generation_time + result.generation_time
-                gen.thumbnail_path = img_result.path
+                    result = self.video_gen.ken_burns(
+                        image_path=img_result.path,
+                        output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                        duration=scene.duration,
+                        fps=self.config.video.default_fps,
+                        zoom_start=zoom_start,
+                        zoom_end=zoom_end,
+                        pan_x=pan_x,
+                        pan_y=pan_y,
+                        ffmpeg_bin=self.config.paths.ffmpeg_bin,
+                    )
+                    gen.model_used = "sdxl+kenburns"
+                    gen.output_path = result.path
+                    gen.seed = img_result.seed
+                    gen.generation_time_sec = img_result.generation_time + result.generation_time
+                    gen.thumbnail_path = img_result.path
 
             else:
                 raise ValueError(f"Unknown scene type: {scene.scene_type}")
@@ -508,6 +629,9 @@ class PipelineOrchestrator:
         session = get_session()
         try:
             project = session.query(Project).get(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+
             scenes = session.query(Scene).filter(
                 Scene.project_id == project_id,
                 Scene.status.in_([SceneStatus.GENERATED, SceneStatus.APPROVED]),
@@ -551,13 +675,55 @@ class PipelineOrchestrator:
                 session.commit()
 
             self.manager.unload()
+
+            # Mark project back to GENERATED when done so they can render
+            project.status = ProjectStatus.GENERATED
+            session.commit()
+
             self._emit_progress(
                 phase=PipelinePhase.IDLE,
                 message="Upscaling complete",
                 percent=100.0,
             )
 
+        except PipelineCancelled as ce:
+            logger.info(f"[Pipeline] Upscale cancelled: {ce}")
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = "Upscale cancelled by user"
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on cancel: {dbe}")
+            
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error="Cancelled",
+                message="Upscale cancelled by user",
+            )
+            raise
+
+        except Exception as e:
+            logger.error(f"[Pipeline] Upscale failed: {e}", exc_info=True)
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = str(e)
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on error: {dbe}")
+            
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error=str(e),
+                message=f"Upscale failed: {e}",
+            )
+            raise
+
         finally:
+            self.manager.unload()
             session.close()
 
     # ── Phase 5: Music Generation ─────────────────────────────────
@@ -633,6 +799,9 @@ class PipelineOrchestrator:
         session = get_session()
         try:
             project = session.query(Project).get(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+
             scenes = session.query(Scene).filter(
                 Scene.project_id == project_id,
                 Scene.status.in_([SceneStatus.GENERATED, SceneStatus.APPROVED]),
@@ -717,6 +886,42 @@ class PipelineOrchestrator:
                 percent=100.0,
             )
 
+        except PipelineCancelled as ce:
+            logger.info(f"[Pipeline] Render cancelled: {ce}")
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = "Render cancelled by user"
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on cancel: {dbe}")
+            
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error="Cancelled",
+                message="Render cancelled by user",
+            )
+            raise
+
+        except Exception as e:
+            logger.error(f"[Pipeline] Render failed: {e}", exc_info=True)
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = str(e)
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on error: {dbe}")
+            
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error=str(e),
+                message=f"Render failed: {e}",
+            )
+            raise
+
         finally:
             session.close()
 
@@ -729,13 +934,28 @@ class PipelineOrchestrator:
     ):
         """
         Run the entire pipeline end-to-end without user intervention.
-        Useful for overnight batch runs.
+        Skips already-completed phases based on current project status.
         """
         logger.info(f"[Pipeline] Starting full auto run for project {project_id}")
 
         try:
-            # Phase 1: Script
-            self.generate_script(project_id)
+            # Check current status to skip completed phases
+            session = get_session()
+            project = session.query(Project).get(project_id)
+            current_status = project.status
+            has_scenes = session.query(Scene).filter(
+                Scene.project_id == project_id
+            ).count() > 0
+            session.close()
+
+            logger.info(f"[Pipeline] Project status: {current_status}, has_scenes: {has_scenes}")
+
+            # Phase 1: Script — only if no script exists yet
+            if current_status == ProjectStatus.DRAFT or not has_scenes:
+                logger.info("[Pipeline] Phase 1: Generating script...")
+                self.generate_script(project_id)
+            else:
+                logger.info(f"[Pipeline] Phase 1: Skipping script generation (status={current_status}, scenes exist)")
 
             # Auto-approve all scenes
             session = get_session()
@@ -743,24 +963,37 @@ class PipelineOrchestrator:
                 Scene.project_id == project_id
             ).all()
             for s in scenes:
-                s.status = SceneStatus.PENDING
+                if s.status in (SceneStatus.PENDING, SceneStatus.FAILED):
+                    s.status = SceneStatus.PENDING
             project = session.query(Project).get(project_id)
             project.status = ProjectStatus.APPROVED
             session.commit()
             session.close()
 
-            # Phase 2: TTS (if narration exists)
+            # Phase 2: TTS (if narration exists) — non-fatal
             if not narration_path:
-                narration_path = self.generate_tts(project_id)
+                try:
+                    narration_path = self.generate_tts(project_id)
+                except Exception as tts_err:
+                    logger.warning(f"[Pipeline] TTS failed (skipping narration): {tts_err}")
+                    narration_path = None
 
-            # Phase 3: Generate assets
+            # Phase 3: Generate assets (video/images)
+            logger.info("[Pipeline] Phase 3: Starting asset generation...")
             self.start_generation(project_id)
 
             # Phase 4: Upscale
-            self.start_upscale(project_id)
+            try:
+                self.start_upscale(project_id)
+            except Exception as upscale_err:
+                logger.warning(f"[Pipeline] Upscale failed (continuing): {upscale_err}")
 
-            # Phase 5: Music
-            music_path = self.generate_music(project_id)
+            # Phase 5: Music — non-fatal
+            music_path = None
+            try:
+                music_path = self.generate_music(project_id)
+            except Exception as music_err:
+                logger.warning(f"[Pipeline] Music generation failed (skipping): {music_err}")
 
             # Phase 6: Render
             self.render(project_id, narration_path=narration_path, music_path=music_path)

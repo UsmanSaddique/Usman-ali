@@ -23,6 +23,7 @@ class ProjectStatus(str, enum.Enum):
     SCRIPTED = "scripted"
     APPROVED = "approved"
     GENERATING = "generating"
+    GENERATED = "generated"
     UPSCALING = "upscaling"
     MUSIC = "music"
     ASSEMBLING = "assembling"

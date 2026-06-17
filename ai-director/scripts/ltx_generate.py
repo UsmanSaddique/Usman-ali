@@ -42,6 +42,11 @@ def main():
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     import torch
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print("[LTX] Enabled TF32 optimizations (TensorFloat-32 on GPU)")
+
     if seed == -1:
         seed = torch.randint(0, 2**32 - 1, (1,)).item()
 

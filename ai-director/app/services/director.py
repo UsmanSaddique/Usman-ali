@@ -211,7 +211,7 @@ Generate the complete scene list as JSON."""
         # Generate
         logger.info(f"[Director] Generating script for '{title}' ({duration}s)")
 
-        response = llm.create_chat_completion(
+        response_stream = llm.create_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
@@ -219,9 +219,41 @@ Generate the complete scene list as JSON."""
             temperature=self.config.llm.temperature,
             max_tokens=self.config.llm.max_tokens,
             response_format={"type": "json_object"},
+            stream=True
         )
 
-        raw_text = response["choices"][0]["message"]["content"]
+        logger.info("[Director] Script generation started (streaming output):")
+        chunks = []
+        current_line = []
+        for chunk in response_stream:
+            choices = chunk.get("choices", [])
+            if not choices:
+                continue
+            choice = choices[0]
+            delta = choice.get("delta", {})
+            content = delta.get("content", "")
+            if not content and "message" in choice:
+                content = choice["message"].get("content", "")
+            
+            if content:
+                chunks.append(content)
+                if "\n" in content:
+                    parts = content.split("\n")
+                    current_line.append(parts[0])
+                    logger.info("".join(current_line))
+                    for part in parts[1:-1]:
+                        logger.info(part)
+                    current_line = [parts[-1]]
+                else:
+                    current_line.append(content)
+                    if sum(len(x) for x in current_line) >= 120:
+                        logger.info("".join(current_line))
+                        current_line = []
+                        
+        if current_line:
+            logger.info("".join(current_line))
+
+        raw_text = "".join(chunks)
         logger.info(f"[Director] Raw response length: {len(raw_text)} chars")
 
         # Parse JSON

@@ -33,14 +33,60 @@ pipeline: Optional[PipelineOrchestrator] = None
 ws_clients: list[WebSocket] = []
 
 
+def _repair_stuck_projects():
+    """Reset any projects stuck in active pipeline states to FAILED on startup."""
+    from app.database import get_session, Project, ProjectStatus
+    session = get_session()
+    try:
+        stuck_projects = session.query(Project).filter(
+            Project.status.in_([
+                ProjectStatus.GENERATING,
+                ProjectStatus.UPSCALING,
+                ProjectStatus.ASSEMBLING,
+            ])
+        ).all()
+        for proj in stuck_projects:
+            logger.info(f"[Main] Resetting stuck project {proj.id} from {proj.status.value} to FAILED on startup")
+            proj.status = ProjectStatus.FAILED
+            proj.error_log = "Server restarted or recovered from ghost state."
+        if stuck_projects:
+            session.commit()
+    except Exception as e:
+        logger.error(f"Failed to repair stuck projects: {e}")
+    finally:
+        session.close()
+
+
 # ── Lifespan ───────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pipeline
     # Startup
+    import os
+    # Suppress bitsandbytes CUDA binary warnings — we don't use quantization
+    os.environ.setdefault("BITSANDBYTES_NOWELCOME", "1")
+    os.environ.setdefault("BNB_CUDA_VERSION", "132")  # Match your CUDA version
+    
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
+    
+    # Register WebSocketLogHandler to root logger
+    ws_log_handler = WebSocketLogHandler()
+    ws_log_handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(message)s"))
+    logging.getLogger().addHandler(ws_log_handler)
+
+    # Global PyTorch optimizations (TF32 on GPU)
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            logger.info("[Main] Global PyTorch optimizations enabled: TF32 allowed on GPU")
+    except ImportError:
+        pass
+
     init_db(str(settings.paths.database))
+    _repair_stuck_projects()
     register_all_loaders(model_manager, settings)
     pipeline = PipelineOrchestrator(settings, model_manager)
     pipeline.on_progress(broadcast_progress_sync)
@@ -63,7 +109,33 @@ app.add_middleware(
 )
 
 
-# ── WebSocket Progress ─────────────────────────────────────────────────────
+# ── WebSocket Progress & Logging ───────────────────────────────────────────
+
+def broadcast_log(message: str):
+    """Broadcast log message to all connected WebSocket clients."""
+    data = {
+        "type": "log",
+        "message": message
+    }
+    for ws in ws_clients[:]:
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(ws.send_json(data))
+        except Exception:
+            pass
+
+
+class WebSocketLogHandler(logging.Handler):
+    """Custom logging handler that streams logs to active WebSocket clients."""
+    def emit(self, record):
+        try:
+            log_message = self.format(record)
+            broadcast_log(log_message)
+        except Exception:
+            pass
+
 
 def broadcast_progress_sync(progress: PipelineProgress):
     """Called from pipeline thread — schedule async broadcast."""
@@ -105,7 +177,29 @@ async def ws_pipeline(websocket: WebSocket, project_id: str):
             data = await websocket.receive_text()
             msg = json.loads(data)
             if msg.get("command") == "cancel":
+                from app.services.pipeline import PipelinePhase
+                is_running = pipeline._progress.phase not in [PipelinePhase.IDLE, PipelinePhase.DONE, PipelinePhase.ERROR]
                 pipeline.cancel()
+                
+                if not is_running:
+                    from app.database import get_db, Project, ProjectStatus
+                    db = next(get_db())
+                    try:
+                        project = db.query(Project).get(project_id)
+                        if project and project.status in [ProjectStatus.GENERATING, ProjectStatus.UPSCALING, ProjectStatus.ASSEMBLING]:
+                            logger.info(f"Force resetting ghost project {project_id} to FAILED since pipeline is IDLE")
+                            project.status = ProjectStatus.FAILED
+                            project.error_log = "Force reset to FAILED by user (cancellation on inactive pipeline)."
+                            db.commit()
+                            pipeline._emit_progress(
+                                phase=PipelinePhase.ERROR,
+                                error="Cancelled",
+                                message="Pipeline was inactive. Status reset to FAILED.",
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to force reset stuck project status: {e}")
+                    finally:
+                        db.close()
                 await websocket.send_json({"type": "info", "message": "Cancellation requested"})
     except WebSocketDisconnect:
         pass
@@ -120,6 +214,12 @@ class CreateProjectReq(BaseModel):
     channel_slug: str
     duration: int  # seconds
     context: str = ""
+    num_scenes: Optional[int] = None
+
+class UpdateProjectReq(BaseModel):
+    title: Optional[str] = None
+    duration: Optional[int] = None  # seconds
+    context: Optional[str] = None
     num_scenes: Optional[int] = None
 
 class UpdateSceneReq(BaseModel):
@@ -222,6 +322,35 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
         "output_path": project.output_path,
         "channel": {"name": project.channel.name, "slug": project.channel.slug},
         "scenes": scenes_data,
+    }
+
+
+@app.put("/api/projects/{project_id}")
+def update_project(project_id: str, req: UpdateProjectReq, db: Session = Depends(get_db)):
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    
+    if project.status not in [ProjectStatus.DRAFT, ProjectStatus.SCRIPTED]:
+        raise HTTPException(400, "Project cannot be updated in its current status")
+        
+    if req.title is not None:
+        project.title = req.title
+    if req.duration is not None:
+        project.duration_target = req.duration
+    if req.num_scenes is not None:
+        project.num_scenes_target = req.num_scenes
+    if req.context is not None:
+        project.context = req.context
+        
+    db.commit()
+    db.refresh(project)
+    return {
+        "id": project.id,
+        "title": project.title,
+        "duration_target": project.duration_target,
+        "num_scenes_target": project.num_scenes_target,
+        "context": project.context
     }
 
 

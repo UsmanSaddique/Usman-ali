@@ -48,8 +48,8 @@ class ImageModelConfig(BaseModel):
     default_cfg: float = 7.0
     default_width: int = 1280
     default_height: int = 720
-    enable_vae_slicing: bool = True
-    enable_vae_tiling: bool = True
+    enable_vae_slicing: bool = False
+    enable_vae_tiling: bool = False
 
 
 class VideoModelConfig(BaseModel):

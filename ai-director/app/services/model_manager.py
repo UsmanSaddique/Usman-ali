@@ -187,16 +187,20 @@ class ModelManager:
             import torch
             if not torch.cuda.is_available():
                 return {"available": False}
+            
+            # Use mem_get_info to get actual system-wide free/total VRAM
+            free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+            free_mb = free_bytes // (1024 * 1024)
+            total_mb = total_bytes // (1024 * 1024)
+            allocated_mb = total_mb - free_mb
+            
             return {
                 "available": True,
                 "device": torch.cuda.get_device_name(0),
-                "total_mb": torch.cuda.get_device_properties(0).total_memory // (1024 * 1024),
-                "allocated_mb": torch.cuda.memory_allocated(0) // (1024 * 1024),
+                "total_mb": total_mb,
+                "allocated_mb": allocated_mb,
                 "reserved_mb": torch.cuda.memory_reserved(0) // (1024 * 1024),
-                "free_mb": (
-                    torch.cuda.get_device_properties(0).total_memory
-                    - torch.cuda.memory_reserved(0)
-                ) // (1024 * 1024),
+                "free_mb": free_mb,
             }
         except ImportError:
             return {"available": False, "error": "torch not installed"}
@@ -219,12 +223,26 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                 n_gpu_layers = getattr(config.llm, "n_gpu_layers", -1)
                 n_ctx = getattr(config.llm, "n_ctx", 8192)
                 
-                llm = Llama(
-                    model_path=str(model_path),
-                    n_ctx=n_ctx,
-                    n_gpu_layers=n_gpu_layers,
-                    verbose=False
-                )
+                try:
+                    logger.info("[ModelManager] Instantiating Llama with flash_attn=True, n_batch=2048, and n_threads=8")
+                    llm = Llama(
+                        model_path=str(model_path),
+                        n_ctx=n_ctx,
+                        n_gpu_layers=n_gpu_layers,
+                        n_batch=2048,
+                        n_threads=8,
+                        n_threads_batch=8,
+                        flash_attn=True,
+                        verbose=False
+                    )
+                except TypeError:
+                    logger.warning("[ModelManager] flash_attn=True or advanced parameters not supported by this llama-cpp-python version. Falling back to basic parameters.")
+                    llm = Llama(
+                        model_path=str(model_path),
+                        n_ctx=n_ctx,
+                        n_gpu_layers=n_gpu_layers,
+                        verbose=False
+                    )
                 
                 vram_est = _estimate_gguf_vram(model_path, n_gpu_layers if n_gpu_layers >= 0 else 64)
                 
@@ -244,7 +262,7 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                 self.base_url = base_url
                 self.n_ctx = n_ctx
 
-            def create_chat_completion(self, messages, temperature=0.7, max_tokens=1024, response_format=None):
+            def create_chat_completion(self, messages, temperature=0.7, max_tokens=1024, response_format=None, stream=False):
                 import urllib.request
                 import json
                 
@@ -253,7 +271,7 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                 payload = {
                     "model": self.model_name,
                     "messages": messages,
-                    "stream": False,
+                    "stream": stream,
                     "options": {
                         "temperature": temperature,
                         "num_predict": max_tokens,
@@ -270,16 +288,34 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                 )
                 
                 try:
-                    with urllib.request.urlopen(req) as response:
-                        result = json.loads(response.read().decode('utf-8'))
-                        # map Ollama response to OpenAI style for DirectorService compatibility
-                        return {
-                            "choices": [
-                                {
-                                    "message": result.get("message", {"content": ""})
-                                }
-                            ]
-                        }
+                    if stream:
+                        def generator():
+                            with urllib.request.urlopen(req) as response:
+                                for line in response:
+                                    if line:
+                                        chunk = json.loads(line.decode('utf-8'))
+                                        content = chunk.get("message", {}).get("content", "")
+                                        yield {
+                                            "choices": [
+                                                {
+                                                    "delta": {
+                                                        "content": content
+                                                    }
+                                                }
+                                            ]
+                                        }
+                        return generator()
+                    else:
+                        with urllib.request.urlopen(req) as response:
+                            result = json.loads(response.read().decode('utf-8'))
+                            # map Ollama response to OpenAI style for DirectorService compatibility
+                            return {
+                                "choices": [
+                                    {
+                                        "message": result.get("message", {"content": ""})
+                                    }
+                                ]
+                            }
                 except Exception as e:
                     import logging
                     logging.getLogger(__name__).error(f"Ollama API Error: {e}")
@@ -334,29 +370,68 @@ def create_image_gen_loader(config) -> Callable[[], LoadedModel]:
     """Factory for SDXL loader via diffusers."""
 
     def loader() -> LoadedModel:
+        import os
         import torch
         from diffusers import StableDiffusionXLPipeline, EulerAncestralDiscreteScheduler
 
         dtype = torch.float16 if config.image.dtype == "float16" else torch.bfloat16
 
-        pipe = StableDiffusionXLPipeline.from_pretrained(
-            str(config.image.path),
+        model_path = str(config.image.path)
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"[ModelManager] SDXL model not found at '{model_path}'.\n"
+                f"Please set the correct path in config.py (image.path) or download SDXL first.\n"
+                f"Download: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0"
+            )
+
+        # Detect single-file (.safetensors/.ckpt) vs diffusers folder
+        is_single_file = model_path.endswith(('.safetensors', '.ckpt', '.pt'))
+
+        load_kwargs = dict(
             torch_dtype=dtype,
             use_safetensors=True,
-            variant="fp16",
-        ).to("cuda")
+        )
+        if is_single_file:
+            from diffusers import StableDiffusionXLPipeline
+            pipe = StableDiffusionXLPipeline.from_single_file(
+                model_path,
+                torch_dtype=dtype,
+            ).to("cuda")
+        else:
+            # Diffusers folder format — only request fp16 variant from HF Hub
+            if os.path.exists(os.path.join(model_path, "model_index.json")):
+                load_kwargs["variant"] = "fp16"
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                model_path,
+                **load_kwargs
+            ).to("cuda")
 
-        # Optimizations
+        # Optimizations for high-VRAM GPU (RTX 5070 Ti, 16GB)
         if config.image.enable_vae_slicing:
             pipe.enable_vae_slicing()
         if config.image.enable_vae_tiling:
             pipe.enable_vae_tiling()
+
+        # Use scaled dot-product attention (PyTorch 2.0+) - no xformers needed
+        try:
+            pipe.unet.set_attn_processor(
+                __import__('diffusers').models.attention_processor.AttnProcessor2_0()
+            )
+            logger.info("[ModelManager] SDXL: Using AttnProcessor2_0 (SDPA) for GPU attention")
+        except Exception as e:
+            logger.warning(f"[ModelManager] AttnProcessor2_0 not available: {e}")
 
         # Set scheduler
         if config.image.scheduler == "euler_a":
             pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(
                 pipe.scheduler.config
             )
+
+        # Ensure VAE is in fp16 too
+        try:
+            pipe.vae.to(dtype=dtype)
+        except Exception:
+            pass
 
         return LoadedModel(
             model_type=ModelType.IMAGE_GEN,
@@ -371,15 +446,15 @@ def create_image_gen_loader(config) -> Callable[[], LoadedModel]:
 
 def create_video_gen_loader(config) -> Callable[[], LoadedModel]:
     """
-    Factory for LTX-Video 2.3 distilled loader.
-    Uses DistilledPipeline + SingleGPUModelBuilder (NOT diffusers LTX2Pipeline).
+    Factory for video generation loader.
+    Tries LTX-Video first, falls back to Wan2.2 via diffusers.
     """
 
     def loader() -> LoadedModel:
         import torch
-        # LTX uses its own pipeline — import from LTX Desktop or custom path
-        # This needs the LTX codebase on sys.path
         import sys
+
+        # ── Try 1: LTX-Video (custom pipeline) ──────────────────────
         ltx_base = config.video.ltx_python.parent.parent
         ltx_src = ltx_base / "ltx_video"
         if str(ltx_src) not in sys.path:
@@ -395,25 +470,64 @@ def create_video_gen_loader(config) -> Callable[[], LoadedModel]:
             )
             pipeline = DistilledPipeline(builder)
 
+            logger.info("[ModelManager] LTX-Video loaded successfully (direct mode)")
             return LoadedModel(
                 model_type=ModelType.VIDEO_GEN,
                 name=config.video.name,
                 model=pipeline,
-                extras={"builder": builder},
+                extras={"builder": builder, "engine": "ltx"},
                 vram_mb=14000,
             )
         except ImportError:
-            # Fallback: call LTX via subprocess
-            logger.warning("LTX Python modules not found, will use subprocess mode")
+            logger.warning("[ModelManager] LTX Python modules not found, trying Wan2.2...")
+
+        # ── Try 2: Wan2.2 via diffusers ──────────────────────────────
+        wan_model_path = str(config.video_alt.path)
+        if os.path.exists(wan_model_path):
+            try:
+                from diffusers import WanPipeline
+                
+                dtype = torch.float16 if config.video_alt.dtype == "float16" else torch.bfloat16
+                
+                logger.info(f"[ModelManager] Loading Wan2.2 from {wan_model_path}...")
+                pipe = WanPipeline.from_single_file(
+                    wan_model_path,
+                    torch_dtype=dtype,
+                ).to("cuda")
+                
+                logger.info("[ModelManager] Wan2.2 video pipeline loaded successfully")
+                return LoadedModel(
+                    model_type=ModelType.VIDEO_GEN,
+                    name=config.video_alt.name,
+                    model=pipe,
+                    extras={"engine": "wan2.2", "pipeline": pipe},
+                    vram_mb=14000,
+                )
+            except ImportError:
+                logger.warning("[ModelManager] diffusers WanPipeline not available")
+            except Exception as e:
+                logger.error(f"[ModelManager] Wan2.2 load failed: {e}")
+
+        # ── Try 3: LTX subprocess mode ───────────────────────────────
+        ltx_script = config.video.ltx_script
+        ltx_python = config.video.ltx_python
+        if ltx_script.exists() and ltx_python.exists():
+            logger.warning("[ModelManager] Falling back to LTX subprocess mode")
             return LoadedModel(
                 model_type=ModelType.VIDEO_GEN,
                 name=config.video.name + "-subprocess",
-                model=None,  # signal to use subprocess
-                extras={"subprocess_mode": True},
+                model=None,
+                extras={"subprocess_mode": True, "engine": "ltx-subprocess"},
                 vram_mb=0,
             )
 
+        raise RuntimeError(
+            "[ModelManager] No video generation backend available!\n"
+            "Install ltx_video, or ensure Wan2.2 model exists, or configure LTX subprocess."
+        )
+
     return loader
+
 
 
 def create_upscaler_loader(config) -> Callable[[], LoadedModel]:
