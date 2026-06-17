@@ -190,11 +190,11 @@ class ModelManager:
             return {
                 "available": True,
                 "device": torch.cuda.get_device_name(0),
-                "total_mb": torch.cuda.get_device_properties(0).total_mem // (1024 * 1024),
+                "total_mb": torch.cuda.get_device_properties(0).total_memory // (1024 * 1024),
                 "allocated_mb": torch.cuda.memory_allocated(0) // (1024 * 1024),
                 "reserved_mb": torch.cuda.memory_reserved(0) // (1024 * 1024),
                 "free_mb": (
-                    torch.cuda.get_device_properties(0).total_mem
+                    torch.cuda.get_device_properties(0).total_memory
                     - torch.cuda.memory_reserved(0)
                 ) // (1024 * 1024),
             }
@@ -209,6 +209,7 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
     """Factory for Qwen LLM loader via llama-cpp-python."""
 
     def loader() -> LoadedModel:
+        import torch  # Import torch first so its CUDA DLLs are added to the search path
         from llama_cpp import Llama
 
         model = Llama(

@@ -1,21 +1,19 @@
 @echo off
 echo ==============================================
-echo AI Director - Environment Setup
+echo AI Director - Environment Setup (Using ComfyUI)
 echo ==============================================
 
-echo Creating virtual environment...
-python -m venv venv
+set COMFY_PYTHON=C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\python_embeded\python.exe
 
-echo Activating virtual environment...
-call venv\Scripts\activate.bat
+echo Installing llama-cpp-python (CPU wheel)...
+"%COMFY_PYTHON%" -m pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 
-echo Installing dependencies...
-pip install -r requirements.txt
+echo Installing remaining dependencies into ComfyUI Python environment...
+"%COMFY_PYTHON%" -m pip install -r requirements.txt
 
 echo ==============================================
 echo Setup Complete!
 echo You can now start the server by running:
-echo     venv\Scripts\activate
-echo     python run.py
+echo     run_server.bat
 echo ==============================================
 pause

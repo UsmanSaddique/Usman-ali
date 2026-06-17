@@ -12,12 +12,12 @@ from typing import Optional
 
 class PathConfig(BaseModel):
     base_dir: Path = Path(__file__).parent.parent
-    models_dir: Path = Path(__file__).parent.parent / "ai-models"
+    models_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models")
     assets_dir: Path = Path(__file__).parent.parent / "assets_generated"
     projects_dir: Path = Path(__file__).parent.parent / "projects"
     database: Path = Path(__file__).parent.parent / "ai_director.db"
     channels_dir: Path = Path(__file__).parent.parent / "channels"
-    loras_dir: Path = Path(__file__).parent.parent / "ai-models" / "loras"
+    loras_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\loras")
     ffmpeg_bin: str = "ffmpeg"  # or full path like "C:/ffmpeg/bin/ffmpeg.exe"
 
     def ensure_dirs(self):
@@ -29,8 +29,8 @@ class PathConfig(BaseModel):
 
 class LLMModelConfig(BaseModel):
     """Qwen director brain via llama-cpp-python."""
-    name: str = "qwen2.5-32b-instruct"
-    path: Path = Path(__file__).parent.parent / "ai-models/llm/qwen2.5-32b-instruct-q4_k_m.gguf"
+    name: str = "qwen3.6-27b"
+    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\Qwen3.6-27B-Q3_K_S.gguf")
     n_ctx: int = 8192            # context window
     n_gpu_layers: int = 35       # how many layers on GPU (tune for VRAM)
     n_batch: int = 512
@@ -44,7 +44,7 @@ class LLMModelConfig(BaseModel):
 class ImageModelConfig(BaseModel):
     """SDXL image generation via diffusers."""
     name: str = "sdxl-base-1.0"
-    path: Path = Path(__file__).parent.parent / "ai-models/image/stable-diffusion-xl-base-1.0"
+    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\stable-diffusion-xl-base-1.0")
     dtype: str = "float16"       # float16 or bfloat16
     scheduler: str = "euler_a"   # euler_a, dpm++_2m_karras, ddim
     default_steps: int = 30
@@ -57,8 +57,8 @@ class ImageModelConfig(BaseModel):
 
 class VideoModelConfig(BaseModel):
     """LTX-Video 2.3 distilled — uses custom pipeline (NOT diffusers)."""
-    name: str = "ltx-2.3-22b-distilled"
-    model_path: Path = Path(__file__).parent.parent / "ai-models/video/ltx-2.3-22b-distilled.safetensors"
+    name: str = "ltx-2.3-22b-distilled-1.1-gguf"
+    model_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\diffusion_models\LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf")
     output_dir: Path = Path(__file__).parent.parent / "assets_generated/ltx_output"
     ltx_python: Path = Path(r"C:\Users\PC\AppData\Local\LTXDesktop\python\python.exe")
     ltx_script: Path = Path(__file__).parent.parent / "scripts/ltx_generate.py"
@@ -73,9 +73,9 @@ class VideoModelConfig(BaseModel):
 
 
 class VideoModelAltConfig(BaseModel):
-    """Wan 2.1 14B — alternative video gen via diffusers."""
-    name: str = "wan2.1-14b"
-    path: Path = Path(__file__).parent.parent / "ai-models/video/wan2.1-14b"
+    """Wan 2.2 14B — alternative video gen via diffusers."""
+    name: str = "wan2.2_t2v_high_noise_14B_fp8"
+    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\diffusion_models\wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors")
     dtype: str = "float16"
     default_width: int = 832
     default_height: int = 480
@@ -88,8 +88,8 @@ class VideoModelAltConfig(BaseModel):
 class UpscaleModelConfig(BaseModel):
     """Real-ESRGAN upscaler."""
     name: str = "realesrgan-x4plus"
-    model_path: Path = Path(__file__).parent.parent / "ai-models/upscale/RealESRGAN_x4plus.pth"
-    anime_model_path: Path = Path(__file__).parent.parent / "ai-models/upscale/RealESRGAN_x4plus_anime_6B.pth"
+    model_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\upscale_models\RealESRGAN_x4plus.pth")
+    anime_model_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\upscale_models\RealESRGAN_x4plus_anime_6B.pth")
     scale: int = 4
     tile_size: int = 512         # lower = less VRAM, slower
     tile_pad: int = 10
@@ -99,7 +99,7 @@ class UpscaleModelConfig(BaseModel):
 class MusicModelConfig(BaseModel):
     """ACE-Step music generation."""
     name: str = "ace-step-v1.5"
-    path: Path = Path(__file__).parent.parent / "ai-models/music/ace-step-v1.5"
+    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\ace-step-v1.5")
     default_duration: int = 60   # seconds
     default_sample_rate: int = 44100
 
