@@ -302,10 +302,10 @@ class PipelineOrchestrator:
 
     # ── Phase 3: Asset Generation ──────────────────────────────────────
 
-    def start_generation(self, project_id: str):
+    def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None):
         """
         Generate all scene assets one by one.
-        For each scene: load appropriate model → generate → unload → next.
+        If scene_ids is provided, only generate those specific scenes.
         """
         session = get_session()
         try:
@@ -313,10 +313,13 @@ class PipelineOrchestrator:
             if not project:
                 raise ValueError(f"Project {project_id} not found")
 
-            scenes = session.query(Scene).filter(
-                Scene.project_id == project_id,
-                Scene.status.in_([SceneStatus.PENDING, SceneStatus.FAILED]),
-            ).order_by(Scene.scene_number).all()
+            query = session.query(Scene).filter(Scene.project_id == project_id)
+            if scene_ids:
+                query = query.filter(Scene.id.in_(scene_ids))
+            else:
+                query = query.filter(Scene.status.in_([SceneStatus.PENDING, SceneStatus.FAILED]))
+            
+            scenes = query.order_by(Scene.scene_number).all()
 
             total = len(scenes)
             project.status = ProjectStatus.GENERATING
@@ -360,11 +363,10 @@ class PipelineOrchestrator:
                     scene.status = SceneStatus.FAILED
                     scene.retry_count += 1
 
-                    # Check cancel before starting slow director advice retry
                     self._check_cancel()
                     if scene.retry_count <= scene.max_retries:
                         try:
-                            self._retry_scene(scene, str(e), clips_dir, images_dir, session)
+                            self._retry_scene_direct(scene, str(e), clips_dir, images_dir, session)
                         except Exception as retry_err:
                             logger.error(f"[Pipeline] Retry also failed: {retry_err}")
 
@@ -446,6 +448,16 @@ class PipelineOrchestrator:
             self.manager.unload()
             session.close()
 
+    def _get_project_loras(self, project) -> list[tuple[str, float]]:
+        """Get LoRA list from project defaults as [(filename, weight), ...]."""
+        ids = project.default_lora_ids or []
+        weights = project.default_lora_weights or []
+        result = []
+        for i, lora_file in enumerate(ids):
+            w = weights[i] if i < len(weights) else 0.8
+            result.append((lora_file, w))
+        return result
+
     def _generate_scene(
         self, scene: Scene, clips_dir: Path, images_dir: Path, session
     ) -> Generation:
@@ -460,9 +472,22 @@ class PipelineOrchestrator:
             status=GenerationStatus.RUNNING,
         )
         session.add(gen)
-        session.flush()  # get gen.id
+        session.flush()
 
-        # Check if SDXL is available for image-based scene types
+        project = scene.project
+        # Prioritize scene's video model, then project's, then default
+        video_model = scene.video_model or getattr(project, "video_model", None) or "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+        project_loras = self._get_project_loras(project)
+
+        # Per-scene LoRA overrides
+        if scene.lora_ids:
+            scene_loras = list(zip(
+                scene.lora_ids,
+                scene.lora_weights or [0.8] * len(scene.lora_ids),
+            ))
+        else:
+            scene_loras = project_loras
+
         sdxl_path = str(self.config.image.path)
         sdxl_available = sdxl_path and os.path.exists(sdxl_path)
 
@@ -473,6 +498,8 @@ class PipelineOrchestrator:
                     negative_prompt=scene.negative_prompt,
                     num_frames=int(scene.duration * self.config.video.default_fps),
                     output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                    model_filename=video_model,
+                    loras=scene_loras or None,
                 )
                 gen.model_used = result.model_used
                 gen.output_path = result.path
@@ -485,17 +512,17 @@ class PipelineOrchestrator:
 
             elif scene.scene_type == SceneType.IMG2VID:
                 if not sdxl_available:
-                    # Fallback: use txt2vid with Wan2.2 instead
                     logger.warning(f"[Pipeline] Scene {scene.scene_number}: SDXL not available, falling back to txt2vid")
                     result = self.video_gen.txt2vid(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
                         num_frames=int(scene.duration * self.config.video.default_fps),
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                        model_filename=video_model,
+                        loras=scene_loras or None,
                     )
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
                 else:
-                    # Step 1: Generate base image with SDXL
                     img_result = self.image_gen.generate(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
@@ -505,13 +532,14 @@ class PipelineOrchestrator:
                     )
                     self.manager.unload()
 
-                    # Step 2: Animate the image
                     result = self.video_gen.img2vid(
                         prompt=scene.prompt,
                         image_path=img_result.path,
                         negative_prompt=scene.negative_prompt,
                         num_frames=int(scene.duration * self.config.video.default_fps),
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                        model_filename=video_model,
+                        loras=scene_loras or None,
                     )
                     gen.model_used = f"sdxl+{result.model_used}"
                     gen.thumbnail_path = img_result.path
@@ -519,25 +547,25 @@ class PipelineOrchestrator:
 
                 gen.output_path = result.path
                 gen.seed = result.seed
-                if not hasattr(gen, 'generation_time_sec') or not gen.generation_time_sec:
+                if not gen.generation_time_sec:
                     gen.generation_time_sec = result.generation_time
 
             elif scene.scene_type == SceneType.STILL_PAN:
                 if not sdxl_available:
-                    # Fallback: use txt2vid with Wan2.2 — no Ken Burns possible without image
                     logger.warning(f"[Pipeline] Scene {scene.scene_number}: SDXL not available, falling back to txt2vid for still_pan")
                     result = self.video_gen.txt2vid(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
                         num_frames=int(scene.duration * self.config.video.default_fps),
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                        model_filename=video_model,
+                        loras=scene_loras or None,
                     )
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
                     gen.output_path = result.path
                     gen.seed = result.seed
                     gen.generation_time_sec = result.generation_time
                 else:
-                    # Step 1: Generate high-quality still with SDXL
                     img_result = self.image_gen.generate(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
@@ -550,7 +578,6 @@ class PipelineOrchestrator:
                     )
                     self.manager.unload()
 
-                    # Step 2: Apply Ken Burns
                     motion = scene.camera_motion or "zoom_in"
                     zoom_start, zoom_end = 1.0, 1.15
                     pan_x, pan_y = 0.0, 0.0
@@ -592,33 +619,54 @@ class PipelineOrchestrator:
 
         return gen
 
+    def _retry_scene_direct(
+        self, scene: Scene, error: str,
+        clips_dir: Path, images_dir: Path, session
+    ):
+        """Retry generation directly without loading LLM for advice.
+        Keeps the video/image model loaded instead of swapping to Qwen."""
+        logger.info(
+            f"[Pipeline] Retrying scene {scene.scene_number} directly "
+            f"(attempt {scene.retry_count}, skipping LLM advice)"
+        )
+
+        # If the error is about a missing model (SDXL), switch scene type to txt2vid
+        error_lower = error.lower()
+        if "not found" in error_lower or "filenotfounderror" in error_lower:
+            if scene.scene_type in (SceneType.STILL_PAN, SceneType.IMG2VID):
+                logger.info(
+                    f"[Pipeline] Scene {scene.scene_number}: model missing, "
+                    f"switching {scene.scene_type.value} → txt2vid fallback"
+                )
+                scene.scene_type = SceneType.TXT2VID
+
+        self._generate_scene(scene, clips_dir, images_dir, session)
+        scene.status = SceneStatus.GENERATED
+
     def _retry_scene(
         self, scene: Scene, error: str,
         clips_dir: Path, images_dir: Path, session
     ):
-        """Use director to adjust prompt and retry generation."""
-        logger.info(f"[Pipeline] Retrying scene {scene.scene_number} (attempt {scene.retry_count})")
+        """Use director LLM to adjust prompt and retry generation.
+        Only called explicitly (e.g. from UI), not during automatic retries."""
+        logger.info(f"[Pipeline] Retrying scene {scene.scene_number} with LLM advice (attempt {scene.retry_count})")
 
-        # Load LLM for advice
-        self.manager.unload()  # free whatever is loaded
+        self.manager.unload()
         advice = self.director.suggest_retry_strategy(
             scene_number=scene.scene_number,
             original_prompt=scene.prompt,
             error_log=error,
             retry_count=scene.retry_count,
         )
-        self.manager.unload()  # free LLM
+        self.manager.unload()
 
-        # Apply advice
         scene.prompt = advice.get("new_prompt", scene.prompt)
         scene.negative_prompt = advice.get("negative_prompt", scene.negative_prompt)
 
-        # Check if director suggests switching scene type
         model_suggestion = advice.get("model_suggestion", "")
         if "kenburns" in model_suggestion.lower() and scene.scene_type != SceneType.STILL_PAN:
             scene.scene_type = SceneType.STILL_PAN
 
-        # Retry generation
         self._generate_scene(scene, clips_dir, images_dir, session)
         scene.status = SceneStatus.GENERATED
 

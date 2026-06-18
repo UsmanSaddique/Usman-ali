@@ -104,6 +104,9 @@ class Project(Base):
     duration_target = Column(Integer, nullable=False)  # seconds
     context = Column(Text)              # user-provided context/notes
     num_scenes_target = Column(Integer, nullable=True) # user-customized target scene count
+    video_model = Column(String, default="LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf")
+    default_lora_ids = Column(JSON, default=list)      # ["lora_file.safetensors", ...]
+    default_lora_weights = Column(JSON, default=list)  # [0.8, 0.7, ...]
     script_raw = Column(Text)           # raw LLM output
     status = Column(SAEnum(ProjectStatus), default=ProjectStatus.DRAFT)
     total_scenes = Column(Integer, default=0)
@@ -133,6 +136,7 @@ class Scene(Base):
     negative_prompt = Column(Text, default="")
     duration = Column(Float, default=5.0)       # seconds
     camera_motion = Column(String, default="static")
+    video_model = Column(String, nullable=True) # per-scene model
     lora_ids = Column(JSON, default=list)       # list of LoRA file paths
     lora_weights = Column(JSON, default=list)   # matching weights
     status = Column(SAEnum(SceneStatus), default=SceneStatus.PENDING)
@@ -241,7 +245,27 @@ def init_db(db_path: str = "D:/ai-director/ai_director.db"):
     _engine = create_engine(f"sqlite:///{db_path}", echo=False)
     Base.metadata.create_all(_engine)
     _SessionLocal = sessionmaker(bind=_engine)
+    _migrate(_engine)
     return _engine
+
+
+def _migrate(engine):
+    """Add columns missing from older DB schemas."""
+    import sqlalchemy
+    with engine.connect() as conn:
+        for table, col, col_type, default in [
+            ("projects", "video_model", "VARCHAR", "'LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf'"),
+            ("projects", "default_lora_ids", "JSON", "'[]'"),
+            ("projects", "default_lora_weights", "JSON", "'[]'"),
+            ("scenes", "video_model", "VARCHAR", "NULL"),
+        ]:
+            try:
+                conn.execute(sqlalchemy.text(
+                    f"ALTER TABLE {table} ADD COLUMN {col} {col_type} DEFAULT {default}"
+                ))
+                conn.commit()
+            except Exception:
+                pass
 
 
 def get_session() -> Session:

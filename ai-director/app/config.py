@@ -18,6 +18,8 @@ class PathConfig(BaseModel):
     database: Path = Path(__file__).parent.parent / "ai_director.db"
     channels_dir: Path = Path(__file__).parent.parent / "channels"
     loras_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\loras")
+    text_encoders_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\text_encoders")
+    vae_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\vae")
     ffmpeg_bin: str = "ffmpeg"  # or full path like "C:/ffmpeg/bin/ffmpeg.exe"
 
     def ensure_dirs(self):
@@ -53,11 +55,11 @@ class ImageModelConfig(BaseModel):
 
 
 class VideoModelConfig(BaseModel):
-    """LTX-Video 2.3 distilled — uses custom pipeline (NOT diffusers)."""
+    """LTX-Video 2.3 distilled — uses ltx_pipelines directly via subprocess."""
     name: str = "ltx-2.3-22b-distilled-1.1-gguf"
     model_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\diffusion_models\LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf")
+    spatial_upsampler_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\latent_upscale_models\ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
     output_dir: Path = Path(__file__).parent.parent / "assets_generated/ltx_output"
-    ltx_python: Path = Path(r"C:\Users\PC\AppData\Local\LTXDesktop\python\python.exe")
     ltx_script: Path = Path(__file__).parent.parent / "scripts/ltx_generate.py"
     use_fp8: bool = True
     default_width: int = 768
@@ -83,9 +85,9 @@ class VideoModelAltConfig(BaseModel):
 
 
 class UpscaleModelConfig(BaseModel):
-    """Real-ESRGAN upscaler."""
-    name: str = "realesrgan-x4plus"
-    model_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\upscale_models\RealESRGAN_x4plus.pth")
+    """Upscaler — supports Real-ESRGAN or compatible ESRGAN models (e.g. 4x-UltraSharp)."""
+    name: str = "4x-UltraSharp"
+    model_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\upscale_models\4x-UltraSharp.pth")
     anime_model_path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\upscale_models\RealESRGAN_x4plus_anime_6B.pth")
     scale: int = 4
     tile_size: int = 512         # lower = less VRAM, slower

@@ -25,6 +25,7 @@ from app.services.model_manager import ModelManager, register_all_loaders
 from app.services.pipeline import PipelineOrchestrator, PipelineProgress
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 
 # ── Globals ────────────────────────────────────────────────────────────────
 
@@ -215,12 +216,21 @@ class CreateProjectReq(BaseModel):
     duration: int  # seconds
     context: str = ""
     num_scenes: Optional[int] = None
+    video_model: Optional[str] = None
+    lora_ids: Optional[list[str]] = None
+    lora_weights: Optional[list[float]] = None
 
 class UpdateProjectReq(BaseModel):
     title: Optional[str] = None
     duration: Optional[int] = None  # seconds
     context: Optional[str] = None
     num_scenes: Optional[int] = None
+
+class GenerateScenesReq(BaseModel):
+    scene_ids: list[str]
+    video_model: str
+    lora_ids: list[str] = []
+    lora_weights: list[float] = []
 
 class UpdateSceneReq(BaseModel):
     prompt: Optional[str] = None
@@ -260,6 +270,9 @@ def create_project(req: CreateProjectReq, db: Session = Depends(get_db)):
         duration_target=req.duration,
         context=req.context,
         num_scenes_target=req.num_scenes,
+        video_model=req.video_model or "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf",
+        default_lora_ids=req.lora_ids or [],
+        default_lora_weights=req.lora_weights or [],
     )
     db.add(project)
     db.commit()
@@ -320,6 +333,9 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
         "total_scenes": project.total_scenes,
         "completed_scenes": project.completed_scenes,
         "output_path": project.output_path,
+        "video_model": project.video_model,
+        "default_lora_ids": project.default_lora_ids or [],
+        "default_lora_weights": project.default_lora_weights or [],
         "channel": {"name": project.channel.name, "slug": project.channel.slug},
         "scenes": scenes_data,
     }
@@ -409,6 +425,37 @@ def start_generation(project_id: str, db: Session = Depends(get_db)):
     thread.start()
 
     return {"status": "started", "message": "Asset generation started"}
+
+
+@app.post("/api/projects/{project_id}/generate-scenes")
+def generate_scenes(project_id: str, req: GenerateScenesReq, db: Session = Depends(get_db)):
+    """Phase 3 (Selective): Update models and generate specific scenes."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    logger.info(f"generate_scenes called for project {project_id} with req: {req.model_dump()}")
+
+    # Update scene configs
+    from app.database import Scene, SceneStatus
+    scenes = db.query(Scene).filter(Scene.id.in_(req.scene_ids), Scene.project_id == project_id).all()
+    for s in scenes:
+        s.video_model = req.video_model
+        s.lora_ids = req.lora_ids
+        s.lora_weights = req.lora_weights
+        s.status = SceneStatus.PENDING
+    db.commit()
+
+    def run():
+        try:
+            pipeline.start_generation(project_id, scene_ids=req.scene_ids)
+        except Exception as e:
+            logger.error(f"Generation failed: {e}", exc_info=True)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": f"Asset generation started for {len(scenes)} scenes"}
 
 
 @app.post("/api/projects/{project_id}/start-upscale")
@@ -671,6 +718,59 @@ def health():
     return {"status": "ok", "version": "1.0.0"}
 
 
+# ── Model / LoRA Discovery & ComfyUI Status ──────────────────────────────
+
+@app.get("/api/available-models")
+def available_models():
+    """Scan ComfyUI diffusion_models folder for available video models."""
+    models_dir = settings.paths.models_dir / "diffusion_models"
+    results = []
+    if models_dir.exists():
+        for f in sorted(models_dir.iterdir()):
+            if f.is_file() and f.suffix in (".gguf", ".safetensors"):
+                fn = f.name
+                fn_lower = fn.lower()
+                family = "ltx" if "ltx" in fn_lower else "wan" if "wan" in fn_lower else "other"
+                results.append({
+                    "filename": fn,
+                    "family": family,
+                    "size_gb": round(f.stat().st_size / (1024**3), 2),
+                })
+    return results
+
+
+@app.get("/api/available-loras")
+def available_loras():
+    """Scan ComfyUI loras folder for available LoRAs."""
+    loras_dir = settings.paths.loras_dir
+    results = []
+    if loras_dir.exists():
+        for f in sorted(loras_dir.iterdir()):
+            if f.is_file() and f.suffix == ".safetensors":
+                fn = f.name
+                fn_lower = fn.lower()
+                family = "ltx" if "ltx" in fn_lower else "wan" if "wan" in fn_lower else "other"
+                results.append({
+                    "filename": fn,
+                    "family": family,
+                    "size_mb": round(f.stat().st_size / (1024**2), 1),
+                })
+    return results
+
+
+@app.get("/api/system/engine-status")
+def engine_status():
+    """Check if the direct Python environment is available."""
+    python_bin = settings.video.ltx_python
+    if not python_bin.exists():
+        return {"running": False, "error": "LTX Python not found"}
+    return {
+        "running": True,
+        "engine": "Direct Python Subprocess",
+        "python_path": str(python_bin)
+    }
+
+
 # ── Seed Data ──────────────────────────────────────────────────────────────
 
 def _seed_default_channel():
@@ -697,7 +797,9 @@ def _seed_default_channel():
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():
+    projects_dir = Path(__file__).parent.parent / "projects"
     app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
+    app.mount("/projects", StaticFiles(directory=str(projects_dir)), name="projects")
 
     @app.get("/")
     def serve_ui():

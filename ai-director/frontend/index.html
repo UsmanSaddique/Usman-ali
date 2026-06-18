@@ -225,6 +225,283 @@ tr { cursor: pointer; }
 .text-dim { color: var(--text-dim); }
 .text-sm { font-size: 0.8rem; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
+
+/* ── Model Selection Cards ───────────────────────────────────── */
+.model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+.model-card {
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+.model-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 60%, rgba(108,92,231,0.05));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.model-card:hover {
+  border-color: rgba(108,92,231,0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(108,92,231,0.15);
+}
+.model-card:hover::before { opacity: 1; }
+.model-card.selected {
+  border-color: var(--accent);
+  background: rgba(108,92,231,0.08);
+  box-shadow: 0 0 0 1px var(--accent), 0 4px 24px rgba(108,92,231,0.2);
+}
+.model-card.selected::after {
+  content: '✓';
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.model-card .model-card-name {
+  font-weight: 700;
+  font-size: 0.88rem;
+  margin-bottom: 6px;
+  padding-right: 28px;
+  word-break: break-word;
+  line-height: 1.3;
+}
+.model-card .model-card-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.model-card .model-card-meta .family-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.family-badge.ltx {
+  background: rgba(108,92,231,0.2);
+  color: #a78bfa;
+}
+.family-badge.wan {
+  background: rgba(0,206,201,0.2);
+  color: var(--accent2);
+}
+.family-badge.other {
+  background: rgba(253,203,110,0.2);
+  color: var(--warning);
+}
+.model-card .model-card-meta .size-tag {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.model-card .model-card-defaults {
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.model-card .model-card-defaults span {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ── LoRA Toggle Cards ───────────────────────────────────────── */
+.lora-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 8px;
+}
+.lora-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.lora-card:hover { border-color: rgba(108,92,231,0.3); }
+.lora-card.enabled {
+  border-color: var(--accent2);
+  background: rgba(0,206,201,0.05);
+}
+.lora-toggle {
+  position: relative;
+  width: 38px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.lora-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.lora-toggle .slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border);
+  border-radius: 20px;
+  transition: 0.3s;
+}
+.lora-toggle .slider::before {
+  content: '';
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: 0.3s;
+}
+.lora-toggle input:checked + .slider {
+  background: var(--accent2);
+}
+.lora-toggle input:checked + .slider::before {
+  background: #fff;
+  transform: translateX(18px);
+}
+.lora-card .lora-info { flex: 1; min-width: 0; }
+.lora-card .lora-info .lora-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  word-break: break-word;
+  line-height: 1.3;
+}
+.lora-card .lora-info .lora-meta {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.lora-card .lora-weight-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.lora-card .lora-weight-control input[type="range"] {
+  width: 60px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border);
+  border-radius: 2px;
+  border: none;
+  padding: 0;
+}
+.lora-card .lora-weight-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent2);
+  cursor: pointer;
+}
+.lora-card .lora-weight-control .weight-val {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent2);
+  width: 28px;
+  text-align: center;
+}
+
+/* ── Start Generation Button ─────────────────────────────────── */
+.btn-generate {
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  color: #fff;
+  padding: 12px 28px;
+  font-size: 1rem;
+  font-weight: 700;
+  border-radius: 10px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s;
+  box-shadow: 0 4px 20px rgba(108,92,231,0.3);
+}
+.btn-generate:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 28px rgba(108,92,231,0.45);
+}
+.btn-generate::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+  transform: translateX(-100%);
+  transition: transform 0.6s;
+}
+.btn-generate:hover::before {
+  transform: translateX(100%);
+}
+.btn-generate .btn-icon {
+  margin-right: 8px;
+  font-size: 1.1em;
+}
+
+/* ── Section Divider ─────────────────────────────────────────── */
+.section-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 20px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── No LoRA Message ─────────────────────────────────────────── */
+.no-lora-msg {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+}
 </style>
 </head>
 <body>
@@ -255,6 +532,8 @@ tr { cursor: pointer; }
       <span id="gpu-vram-text" class="label">— / — MB</span>
       <span class="label">Model:</span>
       <span class="model-name" id="gpu-model">None</span>
+      <span style="margin-left:8px;" class="label">ComfyUI:</span>
+      <span id="comfyui-indicator" style="font-weight:600; color:var(--text-dim);">—</span>
     </div>
 
     <!-- ═════ PAGE: Dashboard ═════ -->
@@ -301,13 +580,17 @@ tr { cursor: pointer; }
             <input type="number" id="new-num-scenes" value="12" min="1" max="100" oninput="updateAvgSceneDuration()">
             <span id="avg-duration-hint" class="text-dim text-sm" style="margin-top: 4px; font-size: 0.75rem;">Avg clip duration: ~25.0s</span>
           </div>
+
           <div class="form-group full">
             <label>Context / Notes (optional)</label>
             <textarea id="new-context" placeholder="Any specific themes, scenes, or details you want included..."></textarea>
           </div>
         </div>
-        <div class="btn-group mt-16">
-          <button class="btn-primary" onclick="createProject()">Create Project</button>
+        <div class="btn-group mt-16" style="flex-wrap: wrap; gap: 10px;">
+          <button class="btn-generate" onclick="createAndGenerate()">
+            <span class="btn-icon">▶</span> Create & Generate Script
+          </button>
+          <button class="btn-primary" onclick="createProject()">Create Project Only</button>
           <button class="btn-outline" onclick="showPage('dashboard')">Cancel</button>
         </div>
       </div>
@@ -339,6 +622,14 @@ tr { cursor: pointer; }
             <div class="form-group">
               <label>Target Scene Count</label>
               <div id="view-num-scenes" class="text-sm font-semibold">—</div>
+            </div>
+            <div class="form-group">
+              <label>Video Model</label>
+              <div id="view-video-model" class="text-sm font-semibold">—</div>
+            </div>
+            <div class="form-group">
+              <label>LoRAs</label>
+              <div id="view-loras" class="text-sm text-dim">None</div>
             </div>
             <div class="form-group full">
               <label>Context / Creative Notes</label>
@@ -397,7 +688,14 @@ tr { cursor: pointer; }
 
       <!-- Scenes -->
       <div class="card">
-        <h3>Scenes <span class="text-dim text-sm" id="scene-count">—</span></h3>
+        <h3 class="flex-between">
+          <span>Scenes <span class="text-dim text-sm" id="scene-count">—</span></span>
+          <div class="btn-group">
+            <button class="btn-outline btn-sm" onclick="selectAllScenes()">Select All</button>
+            <button class="btn-outline btn-sm" onclick="deselectAllScenes()">None</button>
+            <button class="btn-primary btn-sm hidden" id="btn-generate-selected" onclick="openGenerateModal()">Generate Selected</button>
+          </div>
+        </h3>
         <div class="scene-grid" id="scene-grid"></div>
       </div>
     </div>
@@ -463,6 +761,30 @@ tr { cursor: pointer; }
   </main>
 </div>
 
+<!-- ═══ Generate Scenes Modal ═══ -->
+<div class="modal-overlay hidden" id="generate-scenes-modal">
+  <div class="modal">
+    <h3>Generate Selected Scenes (<span id="gen-scenes-count">0</span>)</h3>
+    <div class="form-grid">
+      <div class="form-group full">
+        <div class="section-label">Video Model</div>
+        <div id="gen-model-grid" class="model-grid"></div>
+        <input type="hidden" id="gen-video-model" value="">
+      </div>
+      <div class="form-group full">
+        <div class="section-label">LoRAs (optional)</div>
+        <div id="gen-loras-list" class="lora-grid"></div>
+      </div>
+    </div>
+    <div class="btn-group mt-16">
+      <button class="btn-generate" onclick="submitGenerateScenes()">
+        <span class="btn-icon">▶</span> Start Generation
+      </button>
+      <button class="btn-outline" onclick="closeGenerateModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ Scene Edit Modal ═══ -->
 <div class="modal-overlay hidden" id="scene-modal">
   <div class="modal">
@@ -515,6 +837,8 @@ let currentProject = null;
 let currentSceneId = null;
 let ws = null;
 let _pollTimer = null;
+let _availableModels = [];
+let _availableLoras = [];
 
 function startProjectPolling(projectId) {
   stopProjectPolling();
@@ -599,6 +923,7 @@ function showPage(page) {
   if (page === 'loras') loadLoRAs();
   if (page === 'new-project') {
     loadChannelsDropdown();
+    loadModelsAndLoras();
     updateAvgSceneDuration();
   }
 }
@@ -630,6 +955,20 @@ async function pollGPU() {
     document.getElementById('gpu-model').textContent = model.name || 'None';
     document.getElementById('gpu-inline').textContent =
       gpu.available !== false ? `${pct}% VRAM` : 'N/A';
+  } catch(e) {}
+  // Also poll Engine
+  try {
+    const cStatus = await api('/api/system/engine-status');
+    const indicator = document.getElementById('comfyui-indicator');
+    if (indicator) {
+      if (cStatus.running) {
+        indicator.textContent = 'Ready';
+        indicator.style.color = 'var(--success)';
+      } else {
+        indicator.textContent = 'Offline';
+        indicator.style.color = 'var(--danger)';
+      }
+    }
   } catch(e) {}
 }
 setInterval(pollGPU, 3000);
@@ -682,6 +1021,12 @@ function renderProject() {
   // Populate details card
   document.getElementById('view-duration').textContent = `${Math.round(p.duration_target / 60)} minutes (${p.duration_target}s)`;
   document.getElementById('view-num-scenes').textContent = p.num_scenes_target || 'Auto (Default)';
+  document.getElementById('view-video-model').textContent = p.video_model || 'Default';
+  const loraList = (p.default_lora_ids || []);
+  const loraWeights = (p.default_lora_weights || []);
+  document.getElementById('view-loras').textContent = loraList.length
+    ? loraList.map((l, i) => `${l} (${loraWeights[i] || 0.8})`).join(', ')
+    : 'None';
   document.getElementById('view-context').textContent = p.context || 'None';
 
   // Toggle Edit button visibility - only in draft or scripted status
@@ -759,19 +1104,30 @@ function renderProject() {
   grid.innerHTML = p.scenes.map(s => {
     const statusClass = s.status === 'approved' ? 'approved' :
                         s.status === 'failed' ? 'failed' : '';
-    return `<div class="scene-card ${statusClass}" onclick="editScene('${s.id}', ${s.scene_number})">
-      <div class="scene-num">Scene ${s.scene_number} · ${s.scene_type}</div>
+    let videoHtml = '';
+    if (s.status === 'generated' || s.status === 'approved') {
+        const vidPath = `/projects/${p.id}/clips/scene_${String(s.scene_number).padStart(3, '0')}_v${s.active_version || 1}.mp4`;
+        videoHtml = `<div class="scene-video"><video src="${vidPath}" controls loop style="width:100%; border-radius:8px; margin-top:8px;"></video></div>`;
+    }
+    return `<div class="scene-card ${statusClass}" onclick="toggleSceneSelection('${s.id}')">
+      <div class="flex-between">
+        <div class="scene-num" style="margin-bottom:0;">
+          <input type="checkbox" class="scene-checkbox" value="${s.id}" onclick="event.stopPropagation(); updateGenerateBtn()">
+          Scene ${s.scene_number} · ${s.scene_type}
+        </div>
+        <div class="btn-group">
+          <button class="btn-outline btn-sm" onclick="event.stopPropagation(); editScene('${s.id}', ${s.scene_number})">Edit</button>
+        </div>
+      </div>
       <div class="scene-prompt">${esc(s.prompt)}</div>
+      ${videoHtml}
       <div class="scene-meta">
         ${statusBadge(s.status)}
         <span>${s.duration}s</span>
         <span>${s.camera_motion}</span>
         ${s.versions ? `<span>v${s.active_version||1}/${s.versions}</span>` : ''}
       </div>
-      <div class="btn-group">
-        <button class="btn-outline btn-sm" onclick="event.stopPropagation(); approveScene('${s.id}')">✓ Approve</button>
-        <button class="btn-outline btn-sm" onclick="event.stopPropagation(); editScene('${s.id}', ${s.scene_number})">Edit</button>
-      </div>
+      
     </div>`;
   }).join('');
 }
@@ -791,6 +1147,176 @@ function cancelPipeline() {
   }
 }
 
+async function loadModelsAndLoras() {
+  try {
+    _availableModels = await api('/api/available-models');
+    _availableLoras = await api('/api/available-loras');
+  } catch(e) { console.error('Failed to load models/loras', e); }
+
+  renderModelCards();
+  filterLoras();
+  checkEngineStatus();
+}
+
+function getModelDefaults(filename) {
+  const fn = filename.toLowerCase();
+  if (fn.includes('ltx')) {
+    const is22b = fn.includes('22b');
+    return {
+      res: is22b ? '768×512' : '768×512',
+      fps: 24,
+      steps: fn.includes('distill') ? 8 : 20,
+      frames: '97–161',
+    };
+  } else if (fn.includes('wan')) {
+    const is5b = fn.includes('5b');
+    return {
+      res: is5b ? '832×480' : '832×480',
+      fps: is5b ? 16 : 16,
+      steps: fn.includes('lightx2v') ? 4 : 30,
+      frames: '81',
+    };
+  }
+  return { res: '768×512', fps: 24, steps: 20, frames: '97' };
+}
+
+function renderModelCards() {
+  const grid = document.getElementById('gen-model-grid');
+  const hiddenInput = document.getElementById('gen-video-model');
+  if (!grid) return;
+
+  if (!_availableModels.length) {
+    grid.innerHTML = '<div class="no-lora-msg">No diffusion models found in ComfyUI/models/diffusion_models</div>';
+    return;
+  }
+
+  // Auto-select first model
+  if (!hiddenInput.value && _availableModels.length) {
+    hiddenInput.value = _availableModels[0].filename;
+  }
+
+  grid.innerHTML = _availableModels.map(m => {
+    const defaults = getModelDefaults(m.filename);
+    const isSelected = hiddenInput.value === m.filename;
+    const shortName = m.filename
+      .replace('.gguf', '').replace('.safetensors', '')
+      .replace(/_/g, ' ').replace(/-/g, ' ');
+    return `
+      <div class="model-card ${isSelected ? 'selected' : ''}" 
+           onclick="selectModel('${m.filename}')" 
+           data-model="${m.filename}">
+        <div class="model-card-name">${shortName}</div>
+        <div class="model-card-meta">
+          <span class="family-badge ${m.family}">${m.family.toUpperCase()}</span>
+          <span class="size-tag">${m.size_gb} GB</span>
+        </div>
+        <div class="model-card-defaults">
+          <span>📐 ${defaults.res}</span>
+          <span>🎞️ ${defaults.fps}fps</span>
+          <span>⚡ ${defaults.steps} steps</span>
+          <span>🎬 ${defaults.frames}f</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function selectModel(filename) {
+  const hiddenInput = document.getElementById('gen-video-model');
+  hiddenInput.value = filename;
+
+  // Update card selection visuals
+  document.querySelectorAll('.model-card').forEach(c => {
+    c.classList.toggle('selected', c.dataset.model === filename);
+  });
+
+  // Re-filter LoRAs for this model family
+  filterLoras();
+}
+
+function filterLoras() {
+  const selectedModel = document.getElementById('gen-video-model')?.value || '';
+  const container = document.getElementById('gen-loras-list');
+  if (!container) return;
+
+  const modelFamily = (selectedModel.toLowerCase().includes('ltx') ? 'ltx' :
+                       selectedModel.toLowerCase().includes('wan') ? 'wan' : '');
+
+  const compatible = _availableLoras.filter(l => !modelFamily || l.family === modelFamily);
+
+  if (!compatible.length) {
+    container.innerHTML = '<div class="no-lora-msg">No compatible LoRAs found for the selected model family</div>';
+    return;
+  }
+
+  container.innerHTML = compatible.map(l => {
+    const shortName = l.filename
+      .replace('.safetensors', '').replace(/_/g, ' ').replace(/-/g, ' ');
+    return `
+      <div class="lora-card" data-lora="${l.filename}">
+        <label class="lora-toggle">
+          <input type="checkbox" class="lora-checkbox" data-filename="${l.filename}"
+                 onchange="toggleLoraCard(this)">
+          <span class="slider"></span>
+        </label>
+        <div class="lora-info">
+          <div class="lora-name">${shortName}</div>
+          <div class="lora-meta">
+            <span class="family-badge ${l.family}" style="display:inline-flex; padding:1px 5px; font-size:0.62rem;">${l.family.toUpperCase()}</span>
+            ${l.size_mb} MB
+          </div>
+        </div>
+        <div class="lora-weight-control">
+          <input type="range" min="0" max="1.5" step="0.05" value="0.8"
+                 class="lora-weight-range" data-filename="${l.filename}"
+                 oninput="updateLoraWeight(this)">
+          <span class="weight-val lora-weight-val" data-filename="${l.filename}">0.8</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleLoraCard(checkbox) {
+  const card = checkbox.closest('.lora-card');
+  if (card) card.classList.toggle('enabled', checkbox.checked);
+}
+
+function updateLoraWeight(slider) {
+  const fn = slider.dataset.filename;
+  const val = parseFloat(slider.value).toFixed(2);
+  const display = document.querySelector(`.lora-weight-val[data-filename="${fn}"]`);
+  if (display) display.textContent = val;
+}
+
+function getSelectedLoras() {
+  const checkboxes = document.querySelectorAll('.lora-checkbox:checked');
+  const ids = [];
+  const weights = [];
+  checkboxes.forEach(cb => {
+    const fn = cb.dataset.filename;
+    ids.push(fn);
+    const weightSlider = document.querySelector(`.lora-weight-range[data-filename="${fn}"]`);
+    weights.push(parseFloat(weightSlider?.value) || 0.8);
+  });
+  return { ids, weights };
+}
+
+async function checkEngineStatus() {
+  const hint = document.getElementById('comfyui-status-hint');
+  if (!hint) return;
+  try {
+    const status = await api('/api/system/engine-status');
+    if (status.running) {
+      hint.innerHTML = '<span style="color:var(--success);">Engine is ready (Direct Python Subprocess)</span>';
+    } else {
+      hint.innerHTML = '<span style="color:var(--danger);">Engine is NOT ready — LTX Python environment missing</span>';
+    }
+  } catch(e) {
+    hint.innerHTML = '<span style="color:var(--danger);">Cannot check Engine status</span>';
+  }
+}
+
 async function createProject() {
   const title = document.getElementById('new-title').value.trim();
   const channel = document.getElementById('new-channel').value;
@@ -800,9 +1326,29 @@ async function createProject() {
   if (!title) { alert('Enter a title'); return; }
   try {
     const result = await api('/api/projects', 'POST', {
-      title, channel_slug: channel, duration, context, num_scenes: numScenes
+      title, channel_slug: channel, duration, context, num_scenes: numScenes,
     });
     openProject(result.id);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function createAndGenerate() {
+  const title = document.getElementById('new-title').value.trim();
+  const channel = document.getElementById('new-channel').value;
+  const duration = parseInt(document.getElementById('new-duration').value) * 60;
+  const numScenes = parseInt(document.getElementById('new-num-scenes').value) || 12;
+  const context = document.getElementById('new-context').value;
+  if (!title) { alert('Enter a title'); return; }
+  try {
+    const result = await api('/api/projects', 'POST', {
+      title, channel_slug: channel, duration, context, num_scenes: numScenes,
+    });
+    // Navigate to the project, then start script generation
+    currentProject = await api(`/api/projects/${result.id}`);
+    showPage('project');
+    renderProject();
+    connectWS(result.id);
+    await api(`/api/projects/${result.id}/generate-script`, 'POST');
   } catch(e) { alert('Error: ' + e.message); }
 }
 
@@ -814,6 +1360,68 @@ function updateAvgSceneDuration() {
   const hintEl = document.getElementById('avg-duration-hint');
   if (hintEl) {
     hintEl.textContent = `Avg clip duration: ~${avgSec.toFixed(1)}s`;
+  }
+}
+
+
+// ── Scene Checkboxes & Generation Modal ────────────────────────────────
+function selectAllScenes() {
+  document.querySelectorAll('.scene-checkbox').forEach(cb => cb.checked = true);
+  updateGenerateBtn();
+}
+function deselectAllScenes() {
+  document.querySelectorAll('.scene-checkbox').forEach(cb => cb.checked = false);
+  updateGenerateBtn();
+}
+function toggleSceneSelection(id) {
+  const cb = document.querySelector(`.scene-checkbox[value="${id}"]`);
+  if(cb) { cb.checked = !cb.checked; updateGenerateBtn(); }
+}
+function updateGenerateBtn() {
+  const count = document.querySelectorAll('.scene-checkbox:checked').length;
+  const btn = document.getElementById('btn-generate-selected');
+  if (count > 0) {
+    btn.classList.remove('hidden');
+    btn.textContent = `Generate Selected (${count})`;
+  } else {
+    btn.classList.add('hidden');
+  }
+}
+function openGenerateModal() {
+  const count = document.querySelectorAll('.scene-checkbox:checked').length;
+  document.getElementById('gen-scenes-count').textContent = count;
+  loadModelsAndLoras();
+  document.getElementById('generate-scenes-modal').classList.remove('hidden');
+}
+function closeGenerateModal() {
+  document.getElementById('generate-scenes-modal').classList.add('hidden');
+}
+async function submitGenerateScenes() {
+  try {
+    const checkboxes = document.querySelectorAll('.scene-checkbox:checked');
+    const sceneIds = Array.from(checkboxes).map(cb => cb.value);
+    const videoModel = document.getElementById('gen-video-model').value;
+    const selectedLoras = getSelectedLoras();
+    
+    if (sceneIds.length === 0) { alert('No scenes selected'); return; }
+    if (!videoModel) { alert('Please select a video model'); return; }
+    
+    const payload = {
+      scene_ids: sceneIds,
+      video_model: videoModel,
+      lora_ids: selectedLoras.ids,
+      lora_weights: selectedLoras.weights
+    };
+    
+    // alert('Sending request: ' + JSON.stringify(payload));
+    
+    await api(`/api/projects/${currentProject.id}/generate-scenes`, 'POST', payload);
+    closeGenerateModal();
+    deselectAllScenes();
+    setTimeout(() => openProject(currentProject.id), 1000);
+  } catch(e) {
+    alert('UI Error: ' + e.message + '\n' + e.stack);
+    console.error(e);
   }
 }
 
@@ -885,6 +1493,8 @@ function connectWS(projectId) {
   ws.onclose = () => console.log('WebSocket closed');
 }
 
+let _isPipelineRunningWS = false;
+
 function updateProgress(data) {
   // Update project page
   const ids = ['proj', 'mon'];
@@ -906,6 +1516,11 @@ function updateProgress(data) {
   // Show progress card
   const isProgressRunning = ['generating','upscaling','assembling','music','scripting'].includes(data.phase);
   document.getElementById('project-progress')?.classList.toggle('hidden', !isProgressRunning);
+  
+  if (isProgressRunning) {
+    _isPipelineRunningWS = true;
+  }
+
   // Always show log card when receiving progress
   document.getElementById('project-logs-card')?.classList.remove('hidden');
   // Log
@@ -915,10 +1530,20 @@ function updateProgress(data) {
     log.innerHTML += `<div>[${ts}] ${esc(data.message || data.phase)}</div>`;
     log.scrollTop = log.scrollHeight;
   }
-  // Auto-refresh on done/error
-  if (data.phase === 'done' || data.phase === 'error') {
-    stopProjectPolling();
-    setTimeout(() => { if (currentProject) openProject(currentProject.id); }, 1500);
+  
+  if (isProgressRunning) {
+    _isPipelineRunningWS = true;
+  }
+  
+  if (!isProgressRunning && _isPipelineRunningWS) {
+    _isPipelineRunningWS = false;
+    setTimeout(() => {
+      openProject(currentProject.id);
+    }, 1000);
+  }
+
+  if (data.phase === 'error') {
+    alert('Backend Pipeline Error:\n' + data.message);
   }
 }
 

@@ -224,14 +224,15 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                 n_ctx = getattr(config.llm, "n_ctx", 8192)
                 
                 try:
-                    logger.info("[ModelManager] Instantiating Llama with flash_attn=True, n_batch=2048, and n_threads=8")
+                    logger.info("[ModelManager] Instantiating Llama with flash_attn=True, n_batch=4096")
                     llm = Llama(
                         model_path=str(model_path),
                         n_ctx=n_ctx,
                         n_gpu_layers=n_gpu_layers,
-                        n_batch=2048,
-                        n_threads=8,
-                        n_threads_batch=8,
+                        n_batch=4096,
+                        n_ubatch=2048,
+                        n_threads=4,
+                        n_threads_batch=4,
                         flash_attn=True,
                         verbose=False
                     )
@@ -451,6 +452,7 @@ def create_video_gen_loader(config) -> Callable[[], LoadedModel]:
     """
 
     def loader() -> LoadedModel:
+        import os
         import torch
         import sys
 
