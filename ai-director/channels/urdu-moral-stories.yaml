@@ -1,6 +1,6 @@
 name: "Urdu Moral Stories"
 slug: "urdu-moral-stories"
-language: "Roman Urdu"   # Urdu written in Latin letters (searchable + readable); set to "English" for an English channel
+language: "English"   # switched to English for voiceover; set "Urdu" (native script) or "Roman Urdu" to change
 made_for_kids: true
 target_audience: "Children 3-9, Urdu/Hindi speaking families (South Asia + diaspora)"
 inspired_by: "Neela Tota, Kidzone — animated Urdu moral story channels"
@@ -38,7 +38,7 @@ still_ratio: 0.8   # mostly SDXL stills + Ken Burns (the CONSISTENT path); a few
 
 # ── Narration ────────────────────────────────────────────────────────────────
 narration:
-  language: "Urdu"
+  language: "English"
   voice: "warm gentle female storyteller"
   pace: "slow and clear, like a bedtime story"
   style: "simple kid-friendly Urdu; short sentences; end with the moral stated plainly"

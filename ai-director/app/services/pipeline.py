@@ -264,13 +264,14 @@ class PipelineOrchestrator:
                 logger.info("[Pipeline] No narration text in any scene, skipping TTS")
                 return None
 
-            # Quick check: is the TTS server reachable?
+            # TTS is now LOCAL (Meta MMS-TTS) — no server needed. Pick the voice
+            # language from the channel profile (English/Urdu/Hindi/Roman Urdu).
+            tts_language = "english"
             try:
-                import httpx
-                httpx.get(self.config.tts.api_url, timeout=3.0)
+                profile = self.director.load_channel_profile(project.channel.slug)
+                tts_language = (profile or {}).get("language", "english")
             except Exception:
-                logger.warning("[Pipeline] TTS server not reachable at %s, skipping narration", self.config.tts.api_url)
-                return None
+                pass
 
             self._emit_progress(
                 phase=PipelinePhase.TTS,
@@ -283,6 +284,7 @@ class PipelineOrchestrator:
             combined_path, segments = self.tts.generate_full_narration(
                 scenes=scene_dicts,
                 output_dir=str(project_dir),
+                language=tts_language,
             )
 
             self._emit_progress(

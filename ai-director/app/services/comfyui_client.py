@@ -527,7 +527,7 @@ def build_acestep_workflow(
     lyrics: str = "",
     seconds: float = 60.0,
     seed: int = 42,
-    steps: int = 50,
+    steps: int = 60,        # higher = better fidelity (ACE-Step sweet spot ~60)
     cfg: float = 5.0,
     ckpt_name: str = "ace_step_v1_3.5b.safetensors",
     output_prefix: str = "ai_director_music",

@@ -1,6 +1,6 @@
 name: "Little Muslim Nation Urdu"
 slug: "little-muslim-nation"
-language: "Roman Urdu"   # Urdu in Latin letters; set to "English" for an English channel
+language: "English"   # switched to English for voiceover; set "Urdu" (native script) or "Roman Urdu" to change
 made_for_kids: true
 target_audience: "Muslim children 3-9 and their families, Urdu speaking (South Asia + diaspora)"
 inspired_by: "Little Muslim Nation (LMN Urdu) — Islamic stories & values for kids"
@@ -34,7 +34,7 @@ negative_prompt_additions: "photorealistic, realistic human, human face, hands, 
 still_ratio: 0.8   # mostly SDXL stills + Ken Burns (consistent); few LTX motion beats
 
 narration:
-  language: "Urdu"
+  language: "English"
   voice: "warm gentle female storyteller"
   pace: "slow, calm, reverent"
   style: "simple respectful kid-friendly Urdu; naturally weave one Islamic value; end by naming the value clearly"

@@ -50,11 +50,41 @@ class TTSService:
     Then run WhisperX forced alignment for word-level timestamps.
     """
 
+    # Language -> Meta MMS-TTS model. Fully local, ~150MB each, runs on CPU.
+    # Meta MMS-TTS has no standalone Urdu voice, but Hindi exists and spoken
+    # Hindi≈Urdu (Hindustani) — so "urdu" routes to the Hindi voice (needs
+    # Devanagari-script input to sound right). Punjabi also available.
+    MMS_MODELS = {
+        "english": "facebook/mms-tts-eng",
+        "en": "facebook/mms-tts-eng",
+        "urdu": "facebook/mms-tts-hin",   # Hindustani voice (sounds like spoken Urdu)
+        "ur": "facebook/mms-tts-hin",
+        "hindi": "facebook/mms-tts-hin",
+        "hi": "facebook/mms-tts-hin",
+        "punjabi": "facebook/mms-tts-pan",
+        # Roman Urdu has no native model — read with the English voice
+        # (Latin-script phonemes); approximate but intelligible.
+        "roman urdu": "facebook/mms-tts-eng",
+    }
+
     def __init__(self, config):
         self.config = config
-        self.api_url = config.tts.api_url
-        self.default_voice = config.tts.default_voice
-        self.default_speed = config.tts.default_speed
+        self.default_speed = getattr(config.tts, "default_speed", 0.95)
+        self.default_language = "english"
+        self._loaded = {}  # model_id -> (model, tokenizer)
+
+    def _get_model(self, language: str):
+        """Lazy-load and cache an MMS-TTS model for a language."""
+        model_id = self.MMS_MODELS.get(str(language).lower().strip(),
+                                       "facebook/mms-tts-eng")
+        if model_id not in self._loaded:
+            from transformers import VitsModel, AutoTokenizer
+            logger.info(f"[TTS] Loading MMS-TTS model '{model_id}' (lang={language})")
+            model = VitsModel.from_pretrained(model_id)
+            tok = AutoTokenizer.from_pretrained(model_id)
+            model.eval()
+            self._loaded[model_id] = (model, tok)
+        return self._loaded[model_id]
 
     # ── Single Text → Speech ───────────────────────────────────────────
 
@@ -64,50 +94,42 @@ class TTSService:
         output_path: str,
         voice: Optional[str] = None,
         speed: Optional[float] = None,
+        language: Optional[str] = None,
     ) -> TTSResult:
-        """
-        Generate speech audio for a single text.
-        Calls WanGP Omnivoice HTTP API.
-        """
-        voice = voice or self.default_voice
-        speed = speed or self.default_speed
+        """Generate speech for one text, fully locally via Meta MMS-TTS."""
+        import torch
+        import numpy as np
+        import scipy.io.wavfile
 
+        language = language or self.default_language
+        speed = speed or self.default_speed
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
         t0 = time.time()
-        logger.info(f"[TTS] Generating: '{text[:60]}...'")
+        logger.info(f"[TTS] Generating ({language}): '{text[:60]}...'")
 
-        # Call WanGP Omnivoice API
+        model, tok = self._get_model(language)
+        # speaking_rate < 1.0 slows speech (gentle pacing for kids content)
         try:
-            response = httpx.post(
-                f"{self.api_url}/api/tts",
-                json={
-                    "text": text,
-                    "voice": voice,
-                    "speed": speed,
-                    "output_format": "wav",
-                },
-                timeout=60.0,
-            )
-            response.raise_for_status()
+            model.speaking_rate = float(speed)
+        except Exception:
+            pass
 
-            # WanGP returns audio bytes directly
-            with open(output_path, 'wb') as f:
-                f.write(response.content)
-
-        except httpx.HTTPError as e:
-            logger.error(f"[TTS] WanGP API error: {e}")
-            raise RuntimeError(f"TTS API failed: {e}")
+        inputs = tok(text, return_tensors="pt")
+        with torch.no_grad():
+            waveform = model(**inputs).waveform  # [1, samples]
+        wav = waveform.squeeze().cpu().numpy()
+        sr = int(model.config.sampling_rate)
+        scipy.io.wavfile.write(output_path, sr, (wav * 32767).astype(np.int16))
 
         elapsed = time.time() - t0
-        duration = self._get_audio_duration(output_path)
-
-        logger.info(f"[TTS] Generated {duration:.1f}s audio in {elapsed:.1f}s")
+        duration = len(wav) / sr
+        logger.info(f"[TTS] Generated {duration:.1f}s audio in {elapsed:.1f}s ({sr}Hz)")
 
         return TTSResult(
             audio_path=output_path,
             duration=duration,
-            sample_rate=22050,
+            sample_rate=sr,
             text=text,
             generation_time=elapsed,
         )
@@ -120,6 +142,7 @@ class TTSService:
         output_dir: str,
         voice: Optional[str] = None,
         pause_between: float = 0.5,
+        language: Optional[str] = None,
     ) -> tuple[str, list[NarrationSegment]]:
         """
         Generate narration for all scenes that have narration_text.
@@ -141,7 +164,7 @@ class TTSService:
             scene_num = scene["scene_number"]
             audio_path = str(out_dir / f"narration_{scene_num:03d}.wav")
 
-            result = self.generate(text, audio_path, voice=voice)
+            result = self.generate(text, audio_path, voice=voice, language=language)
 
             segment = NarrationSegment(
                 scene_number=scene_num,
