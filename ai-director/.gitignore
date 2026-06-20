@@ -1,0 +1,80 @@
+# ─── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ─── Virtual environments ─────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ─── Models / weights (never commit — huge, live in ComfyUI) ─
+*.safetensors
+*.gguf
+*.ckpt
+*.pth
+*.pt
+*.bin
+*.onnx
+*.dll
+*.so
+*.dylib
+
+# ─── Databases ────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Generated output (videos, images, audio, scripts) ─────
+projects/
+assets_generated/
+outputs/
+last_script.json
+
+# ─── Generated media anywhere ─────────────────────────────
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.gif
+*.wav
+*.mp3
+*.flac
+*.aac
+*.m4a
+*.ogg
+*.png
+*.jpg
+*.jpeg
+*.webp
+# keep small UI/static assets if any are committed intentionally:
+!frontend/**/*.png
+!frontend/**/*.svg
+
+# ─── Logs & temp ──────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+# temp probe/scratch scripts (underscore + lowercase) — NOT __init__.py
+_[a-z]*.py
+
+# ─── Env / secrets ────────────────────────────────────────
+.env
+*.key
+credentials.json
+client_secret*.json
+token.json
+
+# ─── OS / editor ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+
+# ─── Accidental junk files ────────────────────────────────
+0.2.75
+{app
+{frontend,scripts,app
