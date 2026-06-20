@@ -771,6 +771,15 @@ tr { cursor: pointer; }
         <div id="gen-model-grid" class="model-grid"></div>
         <input type="hidden" id="gen-video-model" value="">
       </div>
+      <div class="form-group">
+        <label>Resolution</label>
+        <select id="gen-resolution" class="input">
+          <option value="">Default (From Model)</option>
+          <option value="768x512">768x512 (Landscape)</option>
+          <option value="512x768">512x768 (Portrait)</option>
+          <option value="1280x720">1280x720 (HD)</option>
+        </select>
+      </div>
       <div class="form-group full">
         <div class="section-label">LoRAs (optional)</div>
         <div id="gen-loras-list" class="lora-grid"></div>
@@ -1117,6 +1126,7 @@ function renderProject() {
         </div>
         <div class="btn-group">
           <button class="btn-outline btn-sm" onclick="event.stopPropagation(); editScene('${s.id}', ${s.scene_number})">Edit</button>
+          <button class="btn-outline btn-sm" onclick="event.stopPropagation(); retryScene('${s.id}')">↻ Retry</button>
         </div>
       </div>
       <div class="scene-prompt">${esc(s.prompt)}</div>
@@ -1406,11 +1416,19 @@ async function submitGenerateScenes() {
     if (sceneIds.length === 0) { alert('No scenes selected'); return; }
     if (!videoModel) { alert('Please select a video model'); return; }
     
+    const resolution = document.getElementById('gen-resolution').value;
+    let width = null, height = null;
+    if (resolution) {
+      [width, height] = resolution.split('x').map(Number);
+    }
+    
     const payload = {
       scene_ids: sceneIds,
       video_model: videoModel,
       lora_ids: selectedLoras.ids,
-      lora_weights: selectedLoras.weights
+      lora_weights: selectedLoras.weights,
+      width: width,
+      height: height
     };
     
     // alert('Sending request: ' + JSON.stringify(payload));
@@ -1457,6 +1475,13 @@ async function saveScene() {
     closeModal();
     openProject(currentProject.id);
   } catch(e) { alert('Error: ' + e.message); }
+}
+function retryScene(sceneId) {
+  deselectAllScenes();
+  const cb = document.querySelector(`.scene-checkbox[value="${sceneId}"]`);
+  if(cb) cb.checked = true;
+  updateGenerateBtn();
+  openGenerateModal();
 }
 
 async function regenerateScene() {

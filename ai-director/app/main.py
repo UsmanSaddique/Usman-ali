@@ -5,6 +5,7 @@ REST API + WebSocket for the web UI.
 import json
 import logging
 import threading
+import asyncio
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -62,7 +63,8 @@ def _repair_stuck_projects():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global pipeline
+    global pipeline, main_loop
+    main_loop = asyncio.get_running_loop()
     # Startup
     import os
     # Suppress bitsandbytes CUDA binary warnings — we don't use quantization
@@ -112,18 +114,20 @@ app.add_middleware(
 
 # ── WebSocket Progress & Logging ───────────────────────────────────────────
 
+main_loop = None
+
 def broadcast_log(message: str):
     """Broadcast log message to all connected WebSocket clients."""
     data = {
         "type": "log",
         "message": message
     }
+    if not main_loop:
+        return
     for ws in ws_clients[:]:
         try:
             import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(ws.send_json(data))
+            asyncio.run_coroutine_threadsafe(ws.send_json(data), main_loop)
         except Exception:
             pass
 
@@ -155,12 +159,11 @@ def broadcast_progress_sync(progress: PipelineProgress):
     # Store latest for new connections
     app.state.last_progress = data
     # Non-blocking broadcast (best effort from sync context)
+    if not main_loop:
+        return
     for ws in ws_clients[:]:
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(ws.send_json(data))
+            asyncio.run_coroutine_threadsafe(ws.send_json(data), main_loop)
         except Exception:
             pass
 
@@ -231,6 +234,8 @@ class GenerateScenesReq(BaseModel):
     video_model: str
     lora_ids: list[str] = []
     lora_weights: list[float] = []
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 class UpdateSceneReq(BaseModel):
     prompt: Optional[str] = None
@@ -444,11 +449,13 @@ def generate_scenes(project_id: str, req: GenerateScenesReq, db: Session = Depen
         s.lora_ids = req.lora_ids
         s.lora_weights = req.lora_weights
         s.status = SceneStatus.PENDING
+    
+    project.status = ProjectStatus.GENERATING
     db.commit()
 
     def run():
         try:
-            pipeline.start_generation(project_id, scene_ids=req.scene_ids)
+            pipeline.start_generation(project_id, scene_ids=req.scene_ids, width=req.width, height=req.height)
         except Exception as e:
             logger.error(f"Generation failed: {e}", exc_info=True)
 
@@ -760,14 +767,14 @@ def available_loras():
 
 @app.get("/api/system/engine-status")
 def engine_status():
-    """Check if the direct Python environment is available."""
-    python_bin = settings.video.ltx_python
-    if not python_bin.exists():
-        return {"running": False, "error": "LTX Python not found"}
+    """Check ComfyUI engine availability (replaces old LTX subprocess check)."""
+    from app.services.comfyui_client import ComfyUIClient
+    client = ComfyUIClient()
+    running = client.ping()
     return {
-        "running": True,
-        "engine": "Direct Python Subprocess",
-        "python_path": str(python_bin)
+        "running": running,
+        "engine": "ComfyUI API",
+        "url": "http://127.0.0.1:8188",
     }
 
 

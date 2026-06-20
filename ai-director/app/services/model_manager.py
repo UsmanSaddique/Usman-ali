@@ -7,6 +7,7 @@ import gc
 import time
 import logging
 import threading
+from pathlib import Path
 from enum import Enum
 from typing import Optional, Any, Callable
 from dataclasses import dataclass, field
@@ -221,20 +222,29 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                 from llama_cpp import Llama
                 
                 n_gpu_layers = getattr(config.llm, "n_gpu_layers", -1)
-                n_ctx = getattr(config.llm, "n_ctx", 8192)
-                
+                n_ctx = getattr(config.llm, "n_ctx", 6144)
+                n_batch = getattr(config.llm, "n_batch", 512)
+                n_ubatch = getattr(config.llm, "n_ubatch", 512)
+                n_threads = getattr(config.llm, "n_threads", 8)
+                flash_attn = getattr(config.llm, "flash_attn", True)
+
                 try:
-                    logger.info("[ModelManager] Instantiating Llama with flash_attn=True, n_batch=4096")
+                    logger.info(
+                        f"[ModelManager] Instantiating Llama "
+                        f"(n_ctx={n_ctx}, n_batch={n_batch}, n_threads={n_threads}, "
+                        f"flash_attn={flash_attn}, n_gpu_layers={n_gpu_layers}) "
+                        f"— tuned to fit all layers on 16GB GPU"
+                    )
                     llm = Llama(
                         model_path=str(model_path),
                         n_ctx=n_ctx,
                         n_gpu_layers=n_gpu_layers,
-                        n_batch=4096,
-                        n_ubatch=2048,
-                        n_threads=4,
-                        n_threads_batch=4,
-                        flash_attn=True,
-                        verbose=False
+                        n_batch=n_batch,
+                        n_ubatch=n_ubatch,
+                        n_threads=n_threads,
+                        n_threads_batch=n_threads,
+                        flash_attn=flash_attn,
+                        verbose=True  # prints "offloaded N/M layers to GPU" so we can verify fit
                     )
                 except TypeError:
                     logger.warning("[ModelManager] flash_attn=True or advanced parameters not supported by this llama-cpp-python version. Falling back to basic parameters.")
@@ -457,7 +467,14 @@ def create_video_gen_loader(config) -> Callable[[], LoadedModel]:
         import sys
 
         # ── Try 1: LTX-Video (custom pipeline) ──────────────────────
-        ltx_base = config.video.ltx_python.parent.parent
+        # Legacy direct-LTX path. The primary backend is now ComfyUI
+        # (see VideoGenService); this only runs if an ltx_python interpreter
+        # is explicitly configured. getattr guards the now-removed config field.
+        ltx_python = getattr(config.video, "ltx_python", None)
+        if ltx_python is None:
+            raise ImportError("LTX direct mode not configured (ltx_python unset)")
+
+        ltx_base = Path(ltx_python).parent.parent
         ltx_src = ltx_base / "ltx_video"
         if str(ltx_src) not in sys.path:
             sys.path.insert(0, str(ltx_src))
@@ -511,9 +528,9 @@ def create_video_gen_loader(config) -> Callable[[], LoadedModel]:
                 logger.error(f"[ModelManager] Wan2.2 load failed: {e}")
 
         # ── Try 3: LTX subprocess mode ───────────────────────────────
-        ltx_script = config.video.ltx_script
-        ltx_python = config.video.ltx_python
-        if ltx_script.exists() and ltx_python.exists():
+        ltx_script = getattr(config.video, "ltx_script", None)
+        ltx_python = getattr(config.video, "ltx_python", None)
+        if ltx_script and ltx_python and Path(ltx_script).exists() and Path(ltx_python).exists():
             logger.warning("[ModelManager] Falling back to LTX subprocess mode")
             return LoadedModel(
                 model_type=ModelType.VIDEO_GEN,

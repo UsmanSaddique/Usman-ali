@@ -1,0 +1,66 @@
+name: "Little Muslim Nation Urdu"
+slug: "little-muslim-nation"
+language: "Roman Urdu"   # Urdu in Latin letters; set to "English" for an English channel
+made_for_kids: true
+target_audience: "Muslim children 3-9 and their families, Urdu speaking (South Asia + diaspora)"
+inspired_by: "Little Muslim Nation (LMN Urdu) — Islamic stories & values for kids"
+vibe: "Gentle, reverent, warm, uplifting — teaches Islamic manners (akhlaq) and values through soft stories"
+
+format: "Islamic values story for kids — good manners, gratitude, kindness, honesty, prayer, sharing — told through a friendly talking-animal cast"
+episode_structure:
+  - "HOOK: a beautiful calm frame + a narration line introducing today's good habit / value"
+  - "SETUP: the animal character in a wholesome everyday situation"
+  - "MOMENT: a chance to practice (or forget) a good Islamic manner"
+  - "GENTLE LESSON: a wise elder character explains the value warmly"
+  - "RESOLUTION: the character practices the good deed and feels the goodness of it"
+  - "CLOSING: restate the value warmly (e.g. shukar, sabr, sachai) + a peaceful loopable frame"
+
+character_system: "Talking animals only — friendly, modest, wholesome. Repeat EXACT descriptors every scene."
+character_bible:
+  - "Tota (parrot): a gentle green parrot with a soft white chest"
+  - "Khargosh (rabbit): a small white rabbit with long ears and kind eyes"
+  - "Dada Ullu (wise elder owl): a calm brown owl with round glasses, the gentle teacher"
+  - "Bakri (goat kid): a tiny cream goat with a little bell"
+
+art_style_phrase: "soft 3D storybook render, rounded gentle shapes, warm pastel shading, calm children's illustration"
+color_palette: "calm warm tones — soft greens, cream, sky blue, gentle gold; serene and peaceful"
+visual_style:
+  - "Stylized illustration / soft 3D only — NEVER photorealistic"
+  - "Modest, wholesome, serene scenes; nature, gardens, cozy homes, mosques as soft background shapes"
+  - "Warm soft daylight; peaceful uncluttered compositions"
+  - "Repeat the art_style_phrase and exact character descriptors in EVERY prompt"
+  - "No depictions of sacred figures or faces; keep any mosque/architecture as gentle distant background only"
+negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, arabic calligraphy as focal text, watermark, scary, dark, harsh lighting, deformed, extra limbs, blurry, low quality"
+still_ratio: 0.7
+
+narration:
+  language: "Urdu"
+  voice: "warm gentle female storyteller"
+  pace: "slow, calm, reverent"
+  style: "simple respectful kid-friendly Urdu; naturally weave one Islamic value; end by naming the value clearly"
+
+music:
+  style: "soft music-free friendly ambience or very light gentle nasheed-style vocal hum, calm and minimal"
+  mood: "peaceful, reverent, warm"
+  tempo: "slow (60-80 bpm)"
+  note: "many Islamic kids channels prefer music-free / vocals-only — keep audio minimal and gentle"
+
+title_formulas:
+  - "{value} ki kahani — Islamic Moral Story for Kids (Urdu), e.g. شکر کی کہانی"
+  - "Warm + value-forward in Urdu script, short English search tail"
+seo_themes:
+  - "islamic stories for kids urdu, akhlaq, good manners islam, bachon ke liye islami kahani, muslim kids values, gratitude kindness honesty"
+
+generation:
+  target_resolution: "1080p"
+  video_base: "1280x720"
+  clip_seconds: [5, 7]
+  prefer: "still_pan for characters & emotion; txt2vid only for ambient motion (gardens, sky, water)"
+  video_model: "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+  default_loras: []
+
+avoid:
+  - "any depiction of prophets, sacred figures, or human faces"
+  - "violence, fear, anything disrespectful or restricted-mode risky"
+  - "focal rendered text or calligraphy (AI renders it wrong)"
+  - "complex multi-character action in a single clip"

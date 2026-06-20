@@ -1,0 +1,226 @@
+[32m[INFO][0m setup plugin alembic.autogenerate.schemas
+[32m[INFO][0m setup plugin alembic.autogenerate.tables
+[32m[INFO][0m setup plugin alembic.autogenerate.types
+[32m[INFO][0m setup plugin alembic.autogenerate.constraints
+[32m[INFO][0m setup plugin alembic.autogenerate.defaults
+[32m[INFO][0m setup plugin alembic.autogenerate.comments
+[32m[INFO][0m 
+Prestartup times for custom nodes:
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\rgthree-comfy
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-easy-use
+[32m[INFO][0m 
+[32m[INFO][0m Found comfy_kitchen backend cuda: {'available': True, 'disabled': False, 'unavailable_reason': None, 'capabilities': ['apply_rope', 'apply_rope1', 'apply_rope_split_half', 'apply_rope_split_half1', 'dequantize_nvfp4', 'dequantize_per_tensor_fp8', 'gemv_awq_w4a16', 'quantize_mxfp8', 'quantize_nvfp4', 'quantize_per_tensor_fp8', 'quantize_svdquant_w4a4', 'scaled_mm_nvfp4', 'scaled_mm_svdquant_w4a4', 'stochastic_rounding_fp8']}
+[32m[INFO][0m Found comfy_kitchen backend eager: {'available': True, 'disabled': False, 'unavailable_reason': None, 'capabilities': ['apply_rope', 'apply_rope1', 'apply_rope_split_half', 'apply_rope_split_half1', 'dequantize_mxfp8', 'dequantize_nvfp4', 'dequantize_per_tensor_fp8', 'gemv_awq_w4a16', 'quantize_mxfp8', 'quantize_nvfp4', 'quantize_per_tensor_fp8', 'quantize_svdquant_w4a4', 'scaled_mm_mxfp8', 'scaled_mm_nvfp4', 'scaled_mm_svdquant_w4a4', 'stochastic_rounding_fp8']}
+[32m[INFO][0m Found comfy_kitchen backend triton: {'available': False, 'disabled': True, 'unavailable_reason': "ImportError: No module named 'triton'", 'capabilities': []}
+[32m[INFO][0m Checkpoint files will always be loaded safely.
+[32m[INFO][0m Total VRAM 16303 MB, total RAM 65305 MB
+[32m[INFO][0m pytorch version: 2.14.0.dev20260612+cu132
+[32m[INFO][0m Set vram state to: NORMAL_VRAM
+[32m[INFO][0m Device: cuda:0 NVIDIA GeForce RTX 5070 Ti : cudaMallocAsync
+[32m[INFO][0m Using async weight offloading with 2 streams
+[32m[INFO][0m Enabled pinned memory 26122.0
+[32m[INFO][0m Using pytorch attention
+aimdo: src-win/cuda-detour.c:38:INFO:aimdo_setup_hooks: installing 6 hooks
+aimdo: src-win/cuda-detour.c:28:DEBUG:install_hook_entries: hooks successfully installed
+aimdo: src-win/shmem-detect.c:80:INFO:comfy-aimdo WDDM adapter match: NVIDIA GeForce RTX 5070 Ti runtime_luid=00000000:0000aad5 dxgi_luid=00000000:0000aad5
+aimdo: src/control.c:241:INFO:comfy-aimdo inited for GPU: NVIDIA GeForce RTX 5070 Ti (VRAM: 16302 MB)
+[32m[INFO][0m DynamicVRAM support detected and enabled
+[32m[INFO][0m Python version: 3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]
+[32m[INFO][0m ComfyUI version: 0.24.0
+[32m[INFO][0m comfy-aimdo version: 0.4.8
+[32m[INFO][0m comfy-kitchen version: 0.2.10
+[32m[INFO][0m comfyui-frontend-package version: 1.44.19
+[32m[INFO][0m comfyui-workflow-templates version: 0.9.94
+[32m[INFO][0m comfyui-embedded-docs version: 0.5.2
+[32m[INFO][0m comfy-kitchen version: 0.2.10
+[32m[INFO][0m comfy-aimdo version: 0.4.8
+[32m[INFO][0m [Prompt Server] web root: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\python_embeded\Lib\site-packages\comfyui_frontend_package\static
+[32m[INFO][0m Asset seeder disabled
+W0620 11:55:11.181000 16972 Lib\site-packages\torch\utils\flop_counter.py:29] triton not found; flop counting will not work for triton kernels
+[32m[INFO][0m ComfyUI-GGUF: Allowing full torch compile
+[1m[33m[WARNING][0m Traceback (most recent call last):
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\nodes.py", line 2212, in load_custom_node
+    module_spec.loader.exec_module(module)
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-LTXVideo\__init__.py", line 48, in <module>
+    from .pyramid_blending import LTXVLaplacianPyramidBlend
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-LTXVideo\pyramid_blending.py", line 7, in <module>
+    from kornia.geometry.transform.pyramid import (
+ImportError: cannot import name 'pad' from 'kornia.geometry.transform.pyramid' (C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\python_embeded\Lib\site-packages\kornia\geometry\transform\pyramid.py)
+
+[1m[33m[WARNING][0m Cannot import C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-LTXVideo module for custom nodes: cannot import name 'pad' from 'kornia.geometry.transform.pyramid' (C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\python_embeded\Lib\site-packages\kornia\geometry\transform\pyramid.py)
+[1m[33m[WARNING][0m Traceback (most recent call last):
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\nodes.py", line 2212, in load_custom_node
+    module_spec.loader.exec_module(module)
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-various\__init__.py", line 78, in <module>
+    load_nodes(module_name)
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-various\__init__.py", line 43, in load_nodes
+    module = importlib.import_module(module_name, package=__name__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "importlib\__init__.py", line 90, in import_module
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-various\comfyui_sound.py", line 7, in <module>
+    import soundfile as sf
+ModuleNotFoundError: No module named 'soundfile'
+
+[1m[33m[WARNING][0m Cannot import C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-various module for custom nodes: No module named 'soundfile'
+[32m[INFO][0m 
+Import times for custom nodes:
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\websocket_image_save.py
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-ScriptSplitter
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\LongPromptSegmenter
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-mxtoolkit
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\cg-use-everywhere
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF
+[32m[INFO][0m    0.0 seconds (IMPORT FAILED): C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-various
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui_essentials
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-custom-scripts
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-image-saver
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\LTXDirector-Extender
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\WhatDreamsCost-ComfyUI
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-kjnodes
+[32m[INFO][0m    0.0 seconds (IMPORT FAILED): C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-LTXVideo
+[32m[INFO][0m    0.0 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\rgthree-comfy
+[32m[INFO][0m    0.1 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-videohelpersuite
+[32m[INFO][0m    0.1 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-MediaMixer
+[32m[INFO][0m    3.8 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-easy-use
+[32m[INFO][0m    3.9 seconds: C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui_layerstyle
+[32m[INFO][0m 
+[32m[INFO][0m Context impl SQLiteImpl.
+[32m[INFO][0m Will assume non-transactional DDL.
+[32m[INFO][0m Using RAM pressure cache.
+[32m[INFO][0m Starting server
+
+[32m[INFO][0m To see the GUI go to: http://127.0.0.1:8188
+[32m[INFO][0m got prompt
+[32m[INFO][0m VAE load device: cuda:0, offload device: cpu, dtype: torch.bfloat16
+[32m[INFO][0m Found quantization metadata version 1
+[32m[INFO][0m Using MixedPrecisionOps for text encoder
+[32m[INFO][0m CLIP/text encoder model load device: cuda:0, offload device: cpu, current: cpu, dtype: torch.float16
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m gguf qtypes: F32 (2700), BF16 (112), Q5_K (68), Q3_K (1564)
+[32m[INFO][0m model weight dtype torch.bfloat16, manual cast: None
+[32m[INFO][0m model_type FLUX
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13351.36 MB usable, 13346.18 MB loaded, 73.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+[34m[ComfyUI-Easy-Use] server: [0mv1.3.6 [92mLoaded[0m
+[34m[ComfyUI-Easy-Use] web root: [0mC:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-easy-use\web_version/v2 [92mLoaded[0m
+# 😺dzNodes: LayerStyle -> [1;33mCannot import name 'guidedFilter' from 'cv2.ximgproc'
+A few nodes cannot works properly, while most nodes are not affected. Please REINSTALL package 'opencv-contrib-python'.
+For detail refer to [4mhttps://github.com/chflame163/ComfyUI_LayerStyle/issues/5[0m[m
+
+[92m[rgthree-comfy] Loaded 48 extraordinary nodes. 🎉[0m
+
+[33m[rgthree-comfy] ComfyUI's new Node 2.0 rendering may be incompatible with some rgthree-comfy nodes and features, breaking some rendering as well as losing the ability to access a node's properties (a vital part of many nodes). It also appears to run MUCH more slowly spiking CPU usage and causing jankiness and unresponsiveness, especially with large workflows. Personally I am not planning to use the new Nodes 2.0 and, unfortunately, am not able to invest the time to investigate and overhaul rgthree-comfy where needed. If you have issues when Nodes 2.0 is enabled, I'd urge you to switch it off as well and join me in hoping ComfyUI is not planning to deprecate the existing, stable canvas rendering all together.
+[0m
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [00:38<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:38<04:27, 38.25s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [02:11<04:27, 38.25s/it]                                    25%|██▌       | 2/8 [02:11<06:33, 65.66s/it] 38%|███▊      | 3/8 [03:04<04:28, 53.64s/it] 50%|█████     | 4/8 [04:52<07:09, 107.49s/it] 62%|██████▎   | 5/8 [07:47<08:43, 174.60s/it] 75%|███████▌  | 6/8 [12:12<08:50, 265.11s/it] 88%|████████▊ | 7/8 [14:52<02:40, 160.04s/it]100%|██████████| 8/8 [17:32<00:00, 160.73s/it]100%|██████████| 8/8 [17:32<00:00, 131.62s/it]
+[32m[INFO][0m Requested to load VideoVAE
+[32m[INFO][0m 0 models unloaded.
+[32m[INFO][0m Model VideoVAE prepared for dynamic VRAM loading. 1384MB Staged. 0 patches attached.
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for p has been set to yuv420p
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for c has been set to 19
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for s has been set to True
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for t has been set to False
+[32m[INFO][0m [32mPrompt executed in 00:17:31[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13349.36 MB usable, 13344.18 MB loaded, 75.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [02:04<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [02:04<14:30, 124.34s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [08:09<14:30, 124.34s/it]                                    25%|██▌       | 2/8 [08:09<24:27, 244.53s/it] 38%|███▊      | 3/8 [11:05<14:44, 176.84s/it] 50%|█████     | 4/8 [11:16<00:43, 11.00s/it] [32m[INFO][0m Global interrupt (no prompt_id specified)
+ 50%|█████     | 4/8 [12:56<12:56, 194.02s/it]
+[32m[INFO][0m Processing interrupted
+[32m[INFO][0m [32mPrompt executed in 00:11:03[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m 0 models unloaded.
+[32m[INFO][0m Unloaded partially: 271.03 MB freed, 13073.15 MB remains loaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ][32m[INFO][0m Global interrupt (no prompt_id specified)
+  0%|          | 0/8 [00:38<?, ?it/s,   Model Initializing ...  ]
+[32m[INFO][0m Processing interrupted
+[32m[INFO][0m [32mPrompt executed in 39.08 seconds[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13349.36 MB usable, 13344.18 MB loaded, 75.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [00:03<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:03<00:21,  3.12s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:05<00:21,  3.12s/it]                                    25%|██▌       | 2/8 [00:05<00:17,  2.89s/it] 38%|███▊      | 3/8 [00:08<00:14,  2.87s/it] 50%|█████     | 4/8 [00:11<00:11,  2.83s/it] 62%|██████▎   | 5/8 [00:14<00:08,  2.80s/it] 75%|███████▌  | 6/8 [00:17<00:05,  2.84s/it] 88%|████████▊ | 7/8 [00:19<00:02,  2.80s/it]100%|██████████| 8/8 [00:22<00:00,  2.81s/it]100%|██████████| 8/8 [00:22<00:00,  2.84s/it]
+[32m[INFO][0m Requested to load VideoVAE
+[32m[INFO][0m Unloaded partially: 7768.78 MB freed, 5575.40 MB remains loaded, 82.69 MB buffer reserved, lowvram patches: 0
+[32m[INFO][0m Model VideoVAE prepared for dynamic VRAM loading. 1384MB Staged. 0 patches attached.
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for p has been set to yuv420p
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for c has been set to 19
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for s has been set to True
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for t has been set to False
+[32m[INFO][0m [32mPrompt executed in 40.79 seconds[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13349.36 MB usable, 13344.18 MB loaded, 75.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [00:02<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:02<00:19,  2.81s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:05<00:19,  2.81s/it]                                    25%|██▌       | 2/8 [00:05<00:16,  2.83s/it] 38%|███▊      | 3/8 [00:08<00:14,  2.86s/it] 50%|█████     | 4/8 [00:11<00:11,  2.86s/it] 62%|██████▎   | 5/8 [00:14<00:08,  2.85s/it] 75%|███████▌  | 6/8 [00:17<00:05,  2.83s/it] 88%|████████▊ | 7/8 [00:19<00:02,  2.86s/it]100%|██████████| 8/8 [00:22<00:00,  2.83s/it]100%|██████████| 8/8 [00:22<00:00,  2.84s/it]
+[32m[INFO][0m Requested to load VideoVAE
+[32m[INFO][0m Unloaded partially: 7768.78 MB freed, 5575.40 MB remains loaded, 82.69 MB buffer reserved, lowvram patches: 0
+[32m[INFO][0m Model VideoVAE prepared for dynamic VRAM loading. 1384MB Staged. 0 patches attached.
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for p has been set to yuv420p
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for c has been set to 19
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for s has been set to True
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for t has been set to False
+[32m[INFO][0m [32mPrompt executed in 36.52 seconds[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13349.36 MB usable, 13344.18 MB loaded, 75.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [00:02<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:02<00:19,  2.83s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:05<00:19,  2.83s/it]                                    25%|██▌       | 2/8 [00:05<00:16,  2.83s/it] 38%|███▊      | 3/8 [00:08<00:14,  2.85s/it] 50%|█████     | 4/8 [00:11<00:11,  2.85s/it] 62%|██████▎   | 5/8 [00:14<00:08,  2.86s/it] 75%|███████▌  | 6/8 [00:17<00:05,  2.83s/it] 88%|████████▊ | 7/8 [00:19<00:02,  2.86s/it]100%|██████████| 8/8 [00:22<00:00,  2.84s/it]100%|██████████| 8/8 [00:22<00:00,  2.84s/it]
+[32m[INFO][0m Requested to load VideoVAE
+[32m[INFO][0m Unloaded partially: 7768.78 MB freed, 5575.40 MB remains loaded, 82.69 MB buffer reserved, lowvram patches: 0
+[32m[INFO][0m Model VideoVAE prepared for dynamic VRAM loading. 1384MB Staged. 0 patches attached.
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for p has been set to yuv420p
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for c has been set to 19
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for s has been set to True
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for t has been set to False
+[32m[INFO][0m [32mPrompt executed in 36.66 seconds[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13349.36 MB usable, 13344.18 MB loaded, 75.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [00:02<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:02<00:19,  2.84s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:05<00:19,  2.84s/it]                                    25%|██▌       | 2/8 [00:05<00:16,  2.83s/it] 38%|███▊      | 3/8 [00:08<00:14,  2.83s/it] 50%|█████     | 4/8 [00:11<00:11,  2.85s/it] 62%|██████▎   | 5/8 [00:14<00:08,  2.83s/it] 75%|███████▌  | 6/8 [00:17<00:05,  2.82s/it] 88%|████████▊ | 7/8 [00:19<00:02,  2.85s/it]100%|██████████| 8/8 [00:22<00:00,  2.85s/it]100%|██████████| 8/8 [00:22<00:00,  2.84s/it]
+[32m[INFO][0m Requested to load VideoVAE
+[32m[INFO][0m Unloaded partially: 7768.78 MB freed, 5575.40 MB remains loaded, 82.69 MB buffer reserved, lowvram patches: 0
+[32m[INFO][0m Model VideoVAE prepared for dynamic VRAM loading. 1384MB Staged. 0 patches attached.
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for p has been set to yuv420p
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for c has been set to 19
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for s has been set to True
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for t has been set to False
+[32m[INFO][0m [32mPrompt executed in 36.95 seconds[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13349.36 MB usable, 13344.18 MB loaded, 75.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [00:02<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:02<00:20,  2.87s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:05<00:20,  2.87s/it]                                    25%|██▌       | 2/8 [00:05<00:17,  2.87s/it] 38%|███▊      | 3/8 [00:08<00:14,  2.90s/it] 50%|█████     | 4/8 [00:11<00:11,  2.83s/it] 62%|██████▎   | 5/8 [00:14<00:08,  2.89s/it] 75%|███████▌  | 6/8 [00:17<00:05,  2.85s/it] 88%|████████▊ | 7/8 [00:20<00:02,  2.83s/it]100%|██████████| 8/8 [00:22<00:00,  2.83s/it]100%|██████████| 8/8 [00:22<00:00,  2.86s/it]
+[32m[INFO][0m Requested to load VideoVAE
+[32m[INFO][0m Unloaded partially: 7768.78 MB freed, 5575.40 MB remains loaded, 82.69 MB buffer reserved, lowvram patches: 0
+[32m[INFO][0m Model VideoVAE prepared for dynamic VRAM loading. 1384MB Staged. 0 patches attached.
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for p has been set to yuv420p
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for c has been set to 19
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for s has been set to True
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for t has been set to False
+[32m[INFO][0m [32mPrompt executed in 37.27 seconds[0m
+[1m[31m[ERROR][0m Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "asyncio\events.py", line 88, in _run
+  File "asyncio\proactor_events.py", line 165, in _call_connection_lost
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host

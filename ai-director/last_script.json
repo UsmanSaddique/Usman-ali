@@ -1,0 +1,144 @@
+{
+  "title": "لالچی طوطا اور بانٹنے کا سبق — Urdu Moral Story",
+  "music_style": "gentle acoustic children's storytelling music, soft flute and light percussion, instrumental, slow to medium tempo",
+  "music_mood": "warm, curious, wholesome",
+  "thumbnail_prompt": "a small round bright-blue parrot with a yellow beak and a tiny red scarf holding a shiny apple, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, warm golden hour lighting, high contrast, bright colors, focused expression",
+  "scenes": [
+    {
+      "scene_number": 1,
+      "scene_type": "still_pan",
+      "prompt": "a small round bright-blue parrot with a yellow beak and a tiny red scarf sitting on a wooden branch, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, warm golden hour lighting, cozy forest background, gentle smile",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows",
+      "duration": 7.5,
+      "camera_motion": "zoom_in",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "ایک دفعہ کا ذکر ہے، ایک نیلا طوطا رہتا تھا جو بہت لالچی تھا۔",
+      "director_notes": {
+        "transition_in": "fade_from_black",
+        "transition_out": "crossfade",
+        "style_cue": "warm golden hour lighting",
+        "importance": "high"
+      }
+    },
+    {
+      "scene_number": 2,
+      "scene_type": "still_pan",
+      "prompt": "a small round bright-blue parrot with a yellow beak and a tiny red scarf holding a large shiny apple in his claws, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, soft daylight, pastel green forest background, focused expression",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows",
+      "duration": 7.5,
+      "camera_motion": "zoom_in",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "اسے ایک بڑا سا سیب ملا، لیکن وہ اسے کسی کے ساتھ بانٹنا نہیں چاہتا تھا۔",
+      "director_notes": {
+        "transition_in": "crossfade",
+        "transition_out": "crossfade",
+        "style_cue": "soft daylight",
+        "importance": "medium"
+      }
+    },
+    {
+      "scene_number": 3,
+      "scene_type": "txt2vid",
+      "prompt": "a small round bright-blue parrot with a yellow beak and a tiny red scarf perched on a branch, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, gentle wind blowing leaves, soft pastel green forest background, peaceful mood",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows, complex multi-character action",
+      "duration": 7.5,
+      "camera_motion": "none",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "وہ اپنے درخت پر چڑھا اور سوچنے لگا، 'میں اس سیب کو خود ہی کھا لوں گا۔'",
+      "director_notes": {
+        "transition_in": "crossfade",
+        "transition_out": "crossfade",
+        "style_cue": "gentle wind blowing leaves",
+        "importance": "medium"
+      }
+    },
+    {
+      "scene_number": 4,
+      "scene_type": "still_pan",
+      "prompt": "a fluffy cream-white rabbit with long ears and big gentle eyes looking up at a branch, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, soft daylight, pastel green forest floor, curious expression",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows",
+      "duration": 7.5,
+      "camera_motion": "zoom_in",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "نیچے ایک خرگوش آیا اور پوچھا، 'طوطا بھائی، کیا تم مجھے تھوڑا سا سیب دے سکتے ہو؟'",
+      "director_notes": {
+        "transition_in": "crossfade",
+        "transition_out": "crossfade",
+        "style_cue": "soft daylight",
+        "importance": "medium"
+      }
+    },
+    {
+      "scene_number": 5,
+      "scene_type": "still_pan",
+      "prompt": "a small round bright-blue parrot with a yellow beak and a tiny red scarf shaking its head with a frown, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, warm golden hour lighting, cozy forest background, stubborn expression",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows",
+      "duration": 7.5,
+      "camera_motion": "zoom_in",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "طوطا نے سر ہلایا، 'نہیں! یہ میرا سیب ہے، میں اسے نہیں بانٹوں گا۔'",
+      "director_notes": {
+        "transition_in": "crossfade",
+        "transition_out": "crossfade",
+        "style_cue": "warm golden hour lighting",
+        "importance": "medium"
+      }
+    },
+    {
+      "scene_number": 6,
+      "scene_type": "still_pan",
+      "prompt": "a plump brown owl with round glasses perched on a branch, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, soft daylight, pastel green forest background, wise expression",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows",
+      "duration": 7.5,
+      "camera_motion": "zoom_in",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "اکھوں والے اُلُو نے کہا، 'دوستو، بانٹنا خوشیاں دگنا کر دیتا ہے۔'",
+      "director_notes": {
+        "transition_in": "crossfade",
+        "transition_out": "crossfade",
+        "style_cue": "soft daylight",
+        "importance": "high"
+      }
+    },
+    {
+      "scene_number": 7,
+      "scene_type": "still_pan",
+      "prompt": "a small round bright-blue parrot with a yellow beak and a tiny red scarf smiling warmly while offering a piece of apple, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, warm golden hour lighting, cozy forest background, joyful expression",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows",
+      "duration": 7.5,
+      "camera_motion": "zoom_in",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "طوطا شرمinda ہوا، اس نے سیب کا ٹکڑا خرگوش کو دیا اور دونوں خوش ہو گئے۔",
+      "director_notes": {
+        "transition_in": "crossfade",
+        "transition_out": "crossfade",
+        "style_cue": "warm golden hour lighting",
+        "importance": "high"
+      }
+    },
+    {
+      "scene_number": 8,
+      "scene_type": "txt2vid",
+      "prompt": "a small round bright-blue parrot with a yellow beak and a tiny red scarf sitting peacefully on a branch, soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration, gentle sparkles falling, soft pastel green forest background, serene mood",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting, photorealistic, realistic human, scary, dark, harsh shadows, complex multi-character action",
+      "duration": 7.5,
+      "camera_motion": "none",
+      "loras": [],
+      "lora_weights": [],
+      "narration_text": "سبق: بانٹنے سے خوشیاں بڑھتی ہیں۔",
+      "director_notes": {
+        "transition_in": "crossfade",
+        "transition_out": "fade_to_black",
+        "style_cue": "gentle sparkles falling",
+        "importance": "high"
+      }
+    }
+  ]
+}

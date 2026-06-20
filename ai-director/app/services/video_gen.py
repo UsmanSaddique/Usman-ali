@@ -5,6 +5,7 @@ Supports LTX GGUF, Wan 2.2, with LoRA support.
 """
 import time
 import logging
+import subprocess
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
@@ -124,8 +125,13 @@ class VideoGenService:
         loras: Optional[list[tuple[str, float]]] = None,
         image_path: Optional[str] = None,
     ) -> VideoResult:
-        if not self.comfy_client.ping():
-            raise RuntimeError("ComfyUI is not reachable at 127.0.0.1:8188")
+        # Wait for ComfyUI rather than failing instantly — it may still be
+        # reloading its CUDA context after the LLM phase released VRAM.
+        if not self.comfy_client.wait_ready(timeout=60.0):
+            raise RuntimeError(
+                "ComfyUI is not reachable at 127.0.0.1:8188 after 60s. "
+                "Start ComfyUI (and make sure nothing else is hogging the 16GB GPU)."
+            )
 
         if not model_filename:
             model_filename = Path(self.config.video.model_path).name
@@ -217,4 +223,75 @@ class VideoGenService:
             generation_time=gen_time,
             prompt_used=prompt,
             model_used=model_filename,
+        )
+
+    def ken_burns(
+        self,
+        image_path: str,
+        output_path: str,
+        duration: float = 5.0,
+        fps: int = 24,
+        zoom_start: float = 1.0,
+        zoom_end: float = 1.15,
+        pan_x: float = 0.0,
+        pan_y: float = 0.0,
+        target_width: int = 1280,
+        target_height: int = 720,
+        ffmpeg_bin: str = "ffmpeg",
+    ) -> VideoResult:
+        """
+        Apply a Ken Burns (slow zoom + pan) effect to a still image using FFmpeg.
+        No GPU needed — pure CPU via FFmpeg's zoompan filter. Used for STILL_PAN
+        scenes so we get gentle motion without paying for a full video generation.
+        """
+        total_frames = max(int(duration * fps), 1)
+
+        # zoom: linear interpolation from zoom_start to zoom_end across the clip
+        # x/y: pan position (center-based), normalized pan_x/pan_y in [-1, 1]
+        zoom_expr = (
+            f"if(eq(on,1),{zoom_start},"
+            f"{zoom_start}+({zoom_end}-{zoom_start})*on/{total_frames})"
+        )
+        x_expr = f"iw/2-(iw/zoom/2)+{pan_x}*on/{total_frames}*iw"
+        y_expr = f"ih/2-(ih/zoom/2)+{pan_y}*on/{total_frames}*ih"
+
+        filter_str = (
+            f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}'"
+            f":d={total_frames}:s={target_width}x{target_height}:fps={fps}"
+        )
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-i", image_path,
+            "-vf", filter_str,
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-t", str(duration),
+            output_path,
+        ]
+
+        t0 = time.time()
+        logger.info(f"[VideoGen] Ken Burns: {image_path} -> {output_path} ({duration}s)")
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg Ken Burns failed: {result.stderr[-500:]}")
+
+        elapsed = time.time() - t0
+
+        return VideoResult(
+            path=output_path,
+            width=target_width,
+            height=target_height,
+            num_frames=total_frames,
+            fps=fps,
+            duration=duration,
+            seed=0,
+            generation_time=elapsed,
+            prompt_used="",
+            model_used="ffmpeg-kenburns",
         )

@@ -40,54 +40,76 @@ class VideoScript:
     music_style: str
     music_mood: str
     thumbnail_prompt: str
+    description: str = ""        # SEO YouTube description
+    tags: list[str] = None       # SEO tags / keywords
+    hashtags: list[str] = None   # #hashtags for title/description
+
+    def __post_init__(self):
+        if self.tags is None:
+            self.tags = []
+        if self.hashtags is None:
+            self.hashtags = []
 
 
 # ── System Prompts ─────────────────────────────────────────────────────────
 
-BASE_SYSTEM_PROMPT = """You are an expert AI Video Director. Your job is to plan YouTube videos that maximize viewer retention and monetization.
+BASE_SYSTEM_PROMPT = """You are an ELITE AI Video Director — operating in the top 0.1% of three crafts at once:
+  1. A YouTube growth strategist who reverse-engineers what makes faceless/animated channels go viral and retain audiences.
+  2. A master children's story writer who can craft a tight, emotionally satisfying moral story with a clear arc.
+  3. An AI art director who knows EXACTLY what a local image/video model on a 16GB GPU can render beautifully — and what it cannot.
 
-You will receive a video title, target duration, and channel profile. You must produce a detailed scene-by-scene breakdown.
+You will receive a video title, target duration, and a Channel Profile. Produce a complete, production-ready scene-by-scene plan that another automated pipeline will execute with NO human cleanup. Every prompt must be directly usable.
 
-## Your Capabilities
-You control these generation models:
-- **SDXL**: High-quality still images (1024x1024 or landscape). Best for detailed scenes, backgrounds, establishing shots.
-- **LTX-Video 2.3**: Motion video clips, 5-7 seconds. Good for: gentle movement, particle effects, camera pans, nature scenes, abstract motion. Bad for: human faces, text, complex interactions, hands.
-- **Ken Burns**: Apply zoom/pan animation to a still image. Best for: establishing shots, landscapes, detailed scenes where motion quality matters less.
+## The Local Generation Stack You Are Directing (16GB VRAM — plan within its limits)
+- **SDXL** → high-quality STILL images (illustration / storybook style). This is your strongest, most reliable tool. Use it heavily.
+- **LTX-Video 2.3 distilled** → short 2–6s motion clips. EXCELLENT at: ambient/environmental motion (drifting clouds, falling leaves, sparkles, flowing water, swaying grass, gentle camera moves, flickering light). POOR at: faces, hands, fingers, lip-sync, fast or complex action, multiple interacting characters, anything with text.
+- **Ken Burns** → slow zoom/pan applied to an SDXL still. Your go-to for character close-ups, emotional beats, and detailed scenes where motion quality matters more than literal movement.
 
-## Rules for AI-Generated Content
-1. NEVER include human faces, hands, or detailed human figures — AI generates these poorly
-2. NEVER include readable text in frames — AI cannot render text reliably
-3. NEVER include copyrighted characters or branded content
-4. Keep each scene visually simple — one main subject, clear composition
-5. Use consistent color palette and style across all scenes
-6. Plan gentle transitions between scenes (crossfade works best)
-7. Each clip should be self-contained (no dependencies on temporal continuity between clips)
-8. Describe scenes in vivid detail: colors, lighting, textures, atmosphere, camera angle
+## Character System (CRITICAL for story channels)
+Local AI cannot keep a character's face consistent across clips. Therefore:
+- Prefer **stylized talking ANIMALS or friendly CREATURES** as protagonists (a wise owl, a little blue parrot, a brave rabbit, a kind elephant). These render far more consistently than humans and fit the kids-story niche perfectly.
+- Maintain a **Character Bible**: pick 2–4 exact physical descriptors per character (species, color, one signature item) and REPEAT THOSE EXACT WORDS in every scene prompt the character appears in. Consistency comes from repetition, not from referencing "the same character".
+- Keep the SAME art style phrase in every prompt (e.g. "soft 3D storybook render, pastel palette, rounded shapes").
+- One clear main subject per scene. Never stage complex multi-character interactions in a single clip — cut between single-subject shots instead.
 
-## Scene Types
-- `txt2vid`: AI generates a video clip from text prompt. Use for scenes needing gentle motion.
-- `img2vid`: AI first generates a still image, then animates it. Use for complex scenes that need a strong base image.
-- `still_pan`: AI generates a high-quality still, then Ken Burns zoom/pan is applied. Use for establishing shots, detailed backgrounds, or when video quality matters most.
+## Visual Prompt Rules
+1. Write ALL visual prompts (`prompt` + `negative_prompt`) in ENGLISH — the models are English-trained and produce much better images. (Narration is a separate field and follows the channel's language.)
+2. NO readable text in frames, NO copyrighted/branded characters, NO human faces in close-up.
+3. Describe vividly: subject + exact descriptors, setting, lighting, mood, color palette, composition/camera angle, art style. 25–60 words is the sweet spot.
+4. Keep a consistent palette and art style across ALL scenes so the channel reads as one cohesive brand.
+5. Each clip is self-contained — assume clips are cut together with crossfades; no shot may depend on motion continuity from the previous shot.
+
+## Scene-Type Strategy (choose deliberately per beat)
+- `still_pan` → SDXL still + Ken Burns. USE THIS MOST. Best for character close-ups, emotional moments, detailed environments, anything needing visual quality. Pair with a `camera_motion`.
+- `txt2vid` → LTX motion clip. Use ONLY for genuinely ambient motion beats (weather, water, particles, establishing nature shots). Never for character action.
+- `img2vid` → use sparingly; only when a beat truly needs a strong base image AND subtle motion.
+Respect the channel's `still_ratio` (fraction of scenes that should be still_pan).
+
+## Retention & Story Engineering
+- Scene 1 is the HOOK: the single most beautiful/intriguing frame + a narration line that opens a curiosity gap or promises the payoff.
+- Structure a real arc: setup → rising tension → turning point → resolution → clear moral. For kids, keep beats short and the moral explicit and warm.
+- Vary shot scale (wide establishing ↔ cozy close-up) to keep the eye engaged.
+- End on a gentle, satisfying, slightly loopable note (helps autoplay/binge metrics).
 
 ## Output Format
-You MUST respond with ONLY valid JSON (no markdown, no explanation, no preamble). Structure:
+Respond with ONLY valid JSON — no markdown, no explanation, no preamble. The pipeline parses these exact fields:
 
 ```json
 {
-  "title": "Video Title",
+  "title": "Click-worthy title in the channel's NARRATION language (curiosity gap, emotional, age-appropriate)",
   "total_duration": 300,
   "scene_count": 60,
   "scenes": [
     {
       "scene_number": 1,
       "scene_type": "still_pan",
-      "prompt": "Detailed visual description...",
-      "negative_prompt": "blurry, low quality, text, watermark, human face, hands...",
+      "prompt": "ENGLISH visual description with exact character descriptors, setting, lighting, palette, art style...",
+      "negative_prompt": "blurry, low quality, text, watermark, human face, hands, deformed, extra limbs, harsh lighting...",
       "duration": 5.0,
       "camera_motion": "zoom_in",
       "loras": [],
       "lora_weights": [],
-      "narration_text": "Optional narration for this scene",
+      "narration_text": "Narration for this scene IN THE CHANNEL'S NARRATION LANGUAGE (empty string if a music/ambient-only beat)",
       "director_notes": {
         "transition_in": "fade_from_black",
         "transition_out": "crossfade",
@@ -96,28 +118,43 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation, no preamble)
       }
     }
   ],
-  "music_style": "gentle piano lullaby with wind chimes",
+  "music_style": "concise music-generation prompt (instruments, genre, tempo)",
   "music_mood": "peaceful, dreamy, magical",
-  "thumbnail_prompt": "Best single frame description for YouTube thumbnail"
+  "thumbnail_prompt": "ENGLISH description of the single most clickable frame for the thumbnail",
+  "description": "SEO-optimized YouTube description in the narration language: a hooky first line, a 2-3 sentence summary, the moral/value, then relevant keywords woven in naturally. End with 3-5 hashtags.",
+  "tags": ["15-25 SEO tags mixing the narration language AND English: topic, character, moral, niche, long-tail search phrases viewers actually type"],
+  "hashtags": ["#3to5", "#relevant", "#hashtags"]
 }
 ```
+
+## SEO REQUIREMENTS (do NOT skip — this drives discovery)
+- `title`: front-load the hook + the most-searched keyword; keep it punchy and clickable, not generic.
+- `description`: first line is a hook (it shows in search). Include the main keyword in the first sentence. Weave in long-tail keywords naturally. Add a clear moral/value line. Finish with hashtags.
+- `tags`: think like the audience's search bar — include the character, the moral/lesson, the niche ("moral stories for kids", "bedtime story"), and BOTH the narration language and English variants. 15-25 tags.
+- Never keyword-stuff awkwardly; it must read naturally to a human.
 """
 
 YT_KNOWLEDGE_PROMPT = """
-## YouTube Monetization Knowledge
-- Kids content (Made for Kids = YES): no personalized ads, lower but consistent CPM ($2-5 USD)
-- Kids content relies on AUTOPLAY VOLUME — design for binge-watching, gentle pacing, no jarring transitions
-- First 30 seconds are critical for retention — start with the most visually appealing scene
-- Aim for consistent visual style so YouTube's algorithm recognizes the channel
-- 5-8 minute videos are optimal for kids: long enough for ad placement, short enough for attention spans
-- Use repetitive but varied patterns — kids love familiar structures with new details
-- Background music should be continuous and gentle — sudden silence or loud changes cause drop-offs
-- Avoid anything that could trigger restricted mode: no violence, no scary imagery, no dark themes
-- For adult content: hook in first 3 seconds, promise value in first 15, deliver throughout
-- For motivational/horror channels: emotional peaks every 60-90 seconds maintain retention
-- CPM varies by season: Q4 (Oct-Dec) is highest, Q1 (Jan-Mar) is lowest
-- Upload consistency matters more than production quality for algorithm favor
-- Descriptions and tags should target long-tail keywords kids might accidentally type
+## YouTube Strategy Knowledge (apply like a top-0.1% creator)
+RETENTION (the metric that drives everything):
+- The first 3–5 seconds decide the video. Open on your strongest visual + a narration hook (a question, a promise, or a tiny mystery).
+- Re-hook every 30–60s with a new visual or a small story turn so the watch-time curve stays flat.
+- Smooth, continuous experience: gentle crossfades, continuous background music, no jarring cuts or sudden silence (silence = drop-off).
+- Satisfying, loopable endings lift autoplay and session time.
+
+KIDS / FAMILY CONTENT (Made for Kids = YES):
+- No personalized ads → CPM is lower but volume + watch time + autoplay carry revenue. Design for BINGE.
+- Gentle pacing, warm tone, zero scary/violent/dark imagery (avoids restricted mode and protects the channel).
+- Familiar, repeatable structures with fresh details each episode — kids love predictability; the algorithm loves a recognizable format.
+- 4–8 minutes is the sweet spot: room for an ad break, short enough to finish.
+
+TITLES, THUMBNAIL & SEO:
+- Title = curiosity gap + emotional word + clarity. Write it in the channel's narration language; keep it skimmable.
+- Thumbnail frame: one clear subject, bright high-contrast colors, big emotion, minimal clutter, no tiny text.
+- Think in searchable, long-tail topics (moral, lesson, character, theme) so the description/tags can target them later.
+
+CONSISTENCY > PERFECTION:
+- A recognizable, repeatable visual identity and a steady upload cadence beat one-off high production. Keep the channel's look identical across videos.
 """
 
 
@@ -155,8 +192,37 @@ class DirectorService:
 
         parts = [BASE_SYSTEM_PROMPT, YT_KNOWLEDGE_PROMPT]
 
+        # Language directive — visual prompts stay English (model quality),
+        # narration + title + SEO follow the channel's language.
+        language = (profile or {}).get("language", "English")
+        lang_lower = str(language).lower()
+        if "roman" in lang_lower:
+            lang_rule = (
+                "- This channel uses **Roman Urdu** — Urdu written in ENGLISH/LATIN letters only. "
+                "Do NOT use Urdu/Arabic script anywhere. "
+                "Example narration: \"Aik dafa ka zikr hai, aik neela tota tha jo bohat lalchi tha.\"\n"
+                "- Write `narration_text`, `title`, `description`, and `tags` in Roman Urdu "
+                "(plus English keywords in tags for search reach)."
+            )
+        elif "urdu" in lang_lower:
+            lang_rule = (
+                "- Write `narration_text`, `title`, `description` in Urdu (اردو script).\n"
+                "- `tags` should mix Urdu and English keywords."
+            )
+        else:
+            lang_rule = (
+                f"- Write `narration_text`, `title`, `description`, and `tags` in {language}."
+            )
+        parts.append(
+            f"\n## Language Directive\n"
+            f"- This channel's narration language is: **{language}**.\n"
+            f"{lang_rule}\n"
+            f"- Write every `prompt` and `negative_prompt` in ENGLISH regardless of narration language.\n"
+            f"- `music_style` and `thumbnail_prompt` always in English."
+        )
+
         if profile:
-            parts.append(f"\n## Channel Profile\n```yaml\n{yaml.dump(profile, default_flow_style=False)}```")
+            parts.append(f"\n## Channel Profile\n```yaml\n{yaml.dump(profile, default_flow_style=False, allow_unicode=True)}```")
 
         return "\n\n".join(parts)
 
@@ -174,6 +240,14 @@ class DirectorService:
         Loads LLM → generates → returns structured script.
         Does NOT unload (caller decides when to free VRAM).
         """
+        # Free ComfyUI's VRAM first so the 27B LLM gets the whole 16GB GPU
+        # (otherwise it spills layers to CPU → slow, ~30% GPU utilization).
+        try:
+            from app.services.comfyui_client import ComfyUIClient
+            ComfyUIClient().free_vram()
+        except Exception:
+            pass
+
         # Load LLM into VRAM
         loaded = self.manager.load(ModelType.LLM)
         llm = loaded.model
@@ -190,16 +264,24 @@ class DirectorService:
         # Build user message
         user_msg = f"""Plan a YouTube video with these specifications:
 
-**Title:** {title}
+**Title/Subject:** {title}
 **Target Duration:** {duration} seconds ({duration // 60} minutes {duration % 60} seconds)
 **Context/Notes:** {context}
+
+CRITICAL RULES:
+1. The entire video MUST be about the "Title/Subject" provided above. Do not deviate from this topic!
+2. Ensure every single scene follows the narrative and includes the subjects mentioned in the title.
+3. Strictly follow all guidelines in the Channel Profile.
 
 Calculate the number of scenes needed:
 - Average clip duration: {avg_duration_str}
 - Total clips needed: exactly {num_scenes}
 - Mix of scene types based on channel profile's still_ratio
 
-Generate the complete scene list as JSON."""
+OUTPUT SHAPE — return ONE JSON object with this EXACT top level. Do NOT return a single scene object; the "scenes" array MUST contain all {num_scenes} scene objects:
+{{"title": "...", "total_duration": {duration}, "scene_count": {num_scenes}, "scenes": [ <<{num_scenes} scene objects>> ], "music_style": "...", "music_mood": "...", "thumbnail_prompt": "...", "description": "...", "tags": ["..."], "hashtags": ["..."]}}
+
+Generate the full object now with all {num_scenes} scenes inside the "scenes" array."""
 
         if available_loras:
             lora_list = "\n".join(
@@ -211,7 +293,11 @@ Generate the complete scene list as JSON."""
         # Generate
         logger.info(f"[Director] Generating script for '{title}' ({duration}s)")
 
-        response_stream = llm.create_chat_completion(
+        # NOTE: non-streaming. The streaming path did not reliably accumulate
+        # this (hybrid SSM/reasoning) model's JSON chunks and produced empty
+        # output; a single non-streaming call with the json_object grammar is
+        # robust and fast on a fully-GPU-resident model.
+        response = llm.create_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
@@ -219,41 +305,10 @@ Generate the complete scene list as JSON."""
             temperature=self.config.llm.temperature,
             max_tokens=self.config.llm.max_tokens,
             response_format={"type": "json_object"},
-            stream=True
+            stream=False,
         )
 
-        logger.info("[Director] Script generation started (streaming output):")
-        chunks = []
-        current_line = []
-        for chunk in response_stream:
-            choices = chunk.get("choices", [])
-            if not choices:
-                continue
-            choice = choices[0]
-            delta = choice.get("delta", {})
-            content = delta.get("content", "")
-            if not content and "message" in choice:
-                content = choice["message"].get("content", "")
-            
-            if content:
-                chunks.append(content)
-                if "\n" in content:
-                    parts = content.split("\n")
-                    current_line.append(parts[0])
-                    logger.info("".join(current_line))
-                    for part in parts[1:-1]:
-                        logger.info(part)
-                    current_line = [parts[-1]]
-                else:
-                    current_line.append(content)
-                    if sum(len(x) for x in current_line) >= 120:
-                        logger.info("".join(current_line))
-                        current_line = []
-                        
-        if current_line:
-            logger.info("".join(current_line))
-
-        raw_text = "".join(chunks)
+        raw_text = response["choices"][0]["message"].get("content", "") or ""
         logger.info(f"[Director] Raw response length: {len(raw_text)} chars")
 
         # Parse JSON
@@ -360,8 +415,20 @@ Respond with ONLY JSON:
             logger.error(f"[Director] Raw text: {raw_text[:500]}")
             raise ValueError(f"Director produced invalid JSON: {e}")
 
+        # Resilience: the model occasionally returns the scenes in a different
+        # shape — a bare list, or a single scene object instead of the wrapper.
+        if isinstance(data, list):
+            data = {"scenes": data}
+        elif "scenes" not in data and ("scene_number" in data or "prompt" in data):
+            logger.warning("[Director] Model returned a single scene object; wrapping it.")
+            data = {"scenes": [data]}
+
+        scene_list = data.get("scenes", [])
+        if not scene_list:
+            logger.error(f"[Director] No scenes in response. Keys: {list(data.keys())}. Raw head: {raw_text[:300]}")
+
         scenes = []
-        for s in data.get("scenes", []):
+        for s in scene_list:
             scenes.append(ScenePlan(
                 scene_number=s.get("scene_number", len(scenes) + 1),
                 scene_type=s.get("scene_type", "txt2vid"),
@@ -383,6 +450,9 @@ Respond with ONLY JSON:
             music_style=data.get("music_style", ""),
             music_mood=data.get("music_mood", ""),
             thumbnail_prompt=data.get("thumbnail_prompt", ""),
+            description=data.get("description", ""),
+            tags=data.get("tags", []) or [],
+            hashtags=data.get("hashtags", []) or [],
         )
 
     @staticmethod

@@ -2,10 +2,29 @@
 AI Director — Configuration
 All paths, model configs, and runtime settings.
 """
+import shutil
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import BaseModel
 from typing import Optional
+
+
+def _resolve_ffmpeg() -> str:
+    """Find a usable ffmpeg binary.
+    Order: PATH → imageio_ffmpeg bundled binary (ships with ComfyUI's
+    embedded python) → bare 'ffmpeg' as a last resort.
+    """
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and Path(exe).exists():
+            return exe
+    except Exception:
+        pass
+    return "ffmpeg"
 
 
 # ── Paths ──────────────────────────────────────────────────────────────────
@@ -20,7 +39,7 @@ class PathConfig(BaseModel):
     loras_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\loras")
     text_encoders_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\text_encoders")
     vae_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\vae")
-    ffmpeg_bin: str = "ffmpeg"  # or full path like "C:/ffmpeg/bin/ffmpeg.exe"
+    ffmpeg_bin: str = _resolve_ffmpeg()  # auto-detected: PATH or bundled imageio_ffmpeg
 
     def ensure_dirs(self):
         for d in [self.base_dir, self.models_dir, self.assets_dir, self.projects_dir, self.channels_dir, self.loras_dir]:
@@ -30,14 +49,26 @@ class PathConfig(BaseModel):
 # ── Model Definitions ──────────────────────────────────────────────────────
 
 class LLMModelConfig(BaseModel):
-    """Director brain via Ollama or llama-cpp-python."""
-    name: str = "qwen2.5:32b"    # Make sure to run `ollama run qwen2.5:32b` or update this
+    """Director brain via Ollama or llama-cpp-python.
+
+    VRAM tuning (16GB / RTX 5070 Ti): the 27B-Q3 weights are ~11.7GB. To fit ALL
+    layers on the GPU (and avoid the slow 30%-GPU CPU-offload path), we keep the
+    KV cache + compute buffers small: modest n_ctx, small n_batch. flash_attn
+    shrinks the KV cache further. n_threads is raised to use the i5-14400F's cores
+    for any work that does land on CPU.
+    """
+    name: str = "qwen2.5:32b"    # Ollama fallback model id (only if local GGUF missing)
     base_url: str = "http://localhost:11434"
     temperature: float = 0.7
     max_tokens: int = 4096
-    n_ctx: int = 8192            # Passed as num_ctx to Ollama
+    n_ctx: int = 8192            # room for the large elite prompt + a full script's output
+                                 # (fits VRAM now that ComfyUI is freed + n_batch is small)
     model_path: Optional[Path] = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\Qwen3.6-27B-Q3_K_S.gguf")
-    n_gpu_layers: int = -1       # -1 means offload all layers to GPU
+    n_gpu_layers: int = -1       # -1 = offload all layers to GPU
+    n_batch: int = 512           # small batch → small compute buffer (frees VRAM for layers)
+    n_ubatch: int = 512
+    n_threads: int = 8           # CPU threads for any non-offloaded work (i5-14400F has 16)
+    flash_attn: bool = True      # smaller KV cache, faster attention
 
 
 class ImageModelConfig(BaseModel):

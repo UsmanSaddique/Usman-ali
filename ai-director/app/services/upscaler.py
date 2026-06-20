@@ -144,9 +144,16 @@ class UpscalerService:
             first_frame = cv2.imread(str(frame_files[0]))
             input_res = (first_frame.shape[1], first_frame.shape[0])
 
-            # Step 2: Upscale each frame
-            loaded = self.manager.load(ModelType.UPSCALER)
-            upsampler = loaded.model
+            # Step 2: Upscale each frame — fall back to ffmpeg scaling if the
+            # Real-ESRGAN model/weights aren't installed.
+            try:
+                loaded = self.manager.load(ModelType.UPSCALER)
+                upsampler = loaded.model
+            except Exception as e:
+                logger.warning(f"[Upscaler] ESRGAN unavailable ({e}); using ffmpeg lanczos upscale")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return self._ffmpeg_upscale(input_path, output_path,
+                                            target_width, target_height, ffmpeg_bin)
 
             for i, frame_path in enumerate(frame_files):
                 frame_bgr = cv2.imread(str(frame_path))
@@ -224,32 +231,73 @@ class UpscalerService:
     # ── Helpers ────────────────────────────────────────────────────────
 
     @staticmethod
+    def _resolve_ffprobe(ffmpeg_bin: str):
+        """Return a usable ffprobe path or None (bundled imageio ffmpeg has none)."""
+        import shutil, os
+        cand = ffmpeg_bin.replace("ffmpeg", "ffprobe")
+        if os.path.isabs(cand) and os.path.exists(cand):
+            return cand
+        return shutil.which("ffprobe")
+
+    @staticmethod
     def _get_video_fps(video_path: str, ffmpeg_bin: str = "ffmpeg") -> float:
-        """Get FPS from a video file using ffprobe."""
-        ffprobe = ffmpeg_bin.replace("ffmpeg", "ffprobe")
-        cmd = [
-            ffprobe, "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=r_frame_rate",
-            "-of", "csv=p=0",
-            video_path
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0 and "/" in result.stdout.strip():
-            num, den = result.stdout.strip().split("/")
-            return float(num) / float(den)
-        return 24.0  # fallback
+        """Get FPS via ffprobe; fall back to parsing `ffmpeg -i`; default 24."""
+        import re
+        ffprobe = UpscalerService._resolve_ffprobe(ffmpeg_bin)
+        if ffprobe:
+            try:
+                cmd = [ffprobe, "-v", "error", "-select_streams", "v:0",
+                       "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", video_path]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if "/" in result.stdout.strip():
+                    num, den = result.stdout.strip().split("/")
+                    return float(num) / float(den)
+            except Exception:
+                pass
+        try:
+            out = subprocess.run([ffmpeg_bin, "-i", video_path],
+                                 capture_output=True, text=True, timeout=30).stderr
+            m = re.search(r"(\d+(?:\.\d+)?)\s*fps", out)
+            if m:
+                return float(m.group(1))
+        except Exception:
+            pass
+        return 24.0
 
     @staticmethod
     def _video_has_audio(video_path: str, ffmpeg_bin: str = "ffmpeg") -> bool:
-        """Check if video has an audio stream."""
-        ffprobe = ffmpeg_bin.replace("ffmpeg", "ffprobe")
-        cmd = [
-            ffprobe, "-v", "error",
-            "-select_streams", "a",
-            "-show_entries", "stream=index",
-            "-of", "csv=p=0",
-            video_path
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return bool(result.stdout.strip())
+        """Check for an audio stream via ffprobe; fall back to `ffmpeg -i` parse."""
+        ffprobe = UpscalerService._resolve_ffprobe(ffmpeg_bin)
+        if ffprobe:
+            try:
+                cmd = [ffprobe, "-v", "error", "-select_streams", "a",
+                       "-show_entries", "stream=index", "-of", "csv=p=0", video_path]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                return bool(result.stdout.strip())
+            except Exception:
+                pass
+        try:
+            out = subprocess.run([ffmpeg_bin, "-i", video_path],
+                                 capture_output=True, text=True, timeout=30).stderr
+            return "Audio:" in out
+        except Exception:
+            return False
+
+    def _ffmpeg_upscale(self, input_path, output_path, target_width, target_height,
+                        ffmpeg_bin) -> "UpscaleResult":
+        """Fallback upscaler using ffmpeg lanczos scaling (no ESRGAN model needed).
+        Produces clean target-resolution video; not as sharp as ESRGAN but reliable."""
+        t0 = time.time()
+        vf = (f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease:flags=lanczos,"
+              f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2")
+        cmd = [ffmpeg_bin, "-y", "-i", input_path, "-vf", vf,
+               "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+               "-pix_fmt", "yuv420p", output_path]
+        subprocess.run(cmd, capture_output=True, check=True, timeout=300)
+        logger.info(f"[Upscaler] ffmpeg lanczos upscale -> {target_width}x{target_height} "
+                    f"in {time.time()-t0:.1f}s (ESRGAN unavailable)")
+        return UpscaleResult(
+            input_path=input_path, output_path=output_path,
+            input_resolution=(0, 0), output_resolution=(target_width, target_height),
+            processing_time=time.time() - t0, frame_count=0,
+        )

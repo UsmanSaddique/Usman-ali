@@ -302,7 +302,7 @@ class PipelineOrchestrator:
 
     # ── Phase 3: Asset Generation ──────────────────────────────────────
 
-    def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None):
+    def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None):
         """
         Generate all scene assets one by one.
         If scene_ids is provided, only generate those specific scenes.
@@ -351,7 +351,7 @@ class PipelineOrchestrator:
 
                 try:
                     generation = self._generate_scene(
-                        scene, clips_dir, images_dir, session
+                        scene, clips_dir, images_dir, session, width=width, height=height
                     )
 
                     scene.status = SceneStatus.GENERATED
@@ -366,7 +366,7 @@ class PipelineOrchestrator:
                     self._check_cancel()
                     if scene.retry_count <= scene.max_retries:
                         try:
-                            self._retry_scene_direct(scene, str(e), clips_dir, images_dir, session)
+                            self._retry_scene_direct(scene, str(e), clips_dir, images_dir, session, width=width, height=height)
                         except Exception as retry_err:
                             logger.error(f"[Pipeline] Retry also failed: {retry_err}")
 
@@ -459,7 +459,7 @@ class PipelineOrchestrator:
         return result
 
     def _generate_scene(
-        self, scene: Scene, clips_dir: Path, images_dir: Path, session
+        self, scene: Scene, clips_dir: Path, images_dir: Path, session, width: Optional[int] = None, height: Optional[int] = None
     ) -> Generation:
         """Generate a single scene based on its type."""
         version = len(scene.generations) + 1
@@ -500,6 +500,8 @@ class PipelineOrchestrator:
                     output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                     model_filename=video_model,
                     loras=scene_loras or None,
+                    width=width,
+                    height=height,
                 )
                 gen.model_used = result.model_used
                 gen.output_path = result.path
@@ -520,18 +522,31 @@ class PipelineOrchestrator:
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                         model_filename=video_model,
                         loras=scene_loras or None,
+                        width=width,
+                        height=height,
                     )
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
+                    gen.output_path = result.path
+                    gen.seed = result.seed
+                    gen.generation_time_sec = result.generation_time
+                    gen.parameters = {
+                        "width": result.width, "height": result.height,
+                        "num_frames": result.num_frames, "fps": result.fps,
+                    }
                 else:
+                    # 1. Generate image first
                     img_result = self.image_gen.generate(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
                         output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
                         lora_paths=scene.lora_ids,
                         lora_weights=scene.lora_weights,
+                        width=width,
+                        height=height,
                     )
                     self.manager.unload()
 
+                    # 2. Img2Vid
                     result = self.video_gen.img2vid(
                         prompt=scene.prompt,
                         image_path=img_result.path,
@@ -540,6 +555,8 @@ class PipelineOrchestrator:
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                         model_filename=video_model,
                         loras=scene_loras or None,
+                        width=width,
+                        height=height,
                     )
                     gen.model_used = f"sdxl+{result.model_used}"
                     gen.thumbnail_path = img_result.path
@@ -560,6 +577,8 @@ class PipelineOrchestrator:
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                         model_filename=video_model,
                         loras=scene_loras or None,
+                        width=width,
+                        height=height,
                     )
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
                     gen.output_path = result.path
@@ -621,7 +640,8 @@ class PipelineOrchestrator:
 
     def _retry_scene_direct(
         self, scene: Scene, error: str,
-        clips_dir: Path, images_dir: Path, session
+        clips_dir: Path, images_dir: Path, session,
+        width: Optional[int] = None, height: Optional[int] = None
     ):
         """Retry generation directly without loading LLM for advice.
         Keeps the video/image model loaded instead of swapping to Qwen."""
@@ -640,7 +660,7 @@ class PipelineOrchestrator:
                 )
                 scene.scene_type = SceneType.TXT2VID
 
-        self._generate_scene(scene, clips_dir, images_dir, session)
+        self._generate_scene(scene, clips_dir, images_dir, session, width=width, height=height)
         scene.status = SceneStatus.GENERATED
 
     def _retry_scene(

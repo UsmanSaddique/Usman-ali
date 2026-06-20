@@ -1,0 +1,72 @@
+name: "Urdu Moral Stories"
+slug: "urdu-moral-stories"
+language: "Roman Urdu"   # Urdu written in Latin letters (searchable + readable); set to "English" for an English channel
+made_for_kids: true
+target_audience: "Children 3-9, Urdu/Hindi speaking families (South Asia + diaspora)"
+inspired_by: "Neela Tota, Kidzone — animated Urdu moral story channels"
+vibe: "Warm, gentle, magical, wholesome — every story ends with a clear moral (sabaq)"
+
+# ── Format / episode structure ──────────────────────────────────────────────
+format: "Animated moral story (akhlaqi kahani) with a wise talking-animal cast and a clear lesson"
+episode_structure:
+  - "HOOK: open on the most charming frame + a narration line that teases the lesson or a little mystery"
+  - "SETUP: introduce the animal character and their everyday world"
+  - "PROBLEM: the character faces a temptation, mistake, or challenge"
+  - "TURNING POINT: a consequence or a wise friend's advice"
+  - "RESOLUTION: the character learns and makes it right"
+  - "MORAL: state the sabaq warmly and clearly, then a gentle loopable closing frame"
+
+# ── Characters: stylized talking animals (most consistent on local AI) ───────
+character_system: "Talking animals only. Pick from the cast below per story and repeat the EXACT descriptors every scene."
+character_bible:
+  - "Tota (parrot): a small round bright-blue parrot with a yellow beak and a tiny red scarf"
+  - "Khargosh (rabbit): a fluffy cream-white rabbit with long ears and big gentle eyes"
+  - "Ullu (owl, the wise elder): a plump brown owl with round glasses perched on a branch"
+  - "Billi (cat): a soft grey kitten with green eyes and a little bell collar"
+  - "Hathi (elephant): a small friendly grey baby elephant with pink ears"
+
+# ── Visual identity (kept identical across all videos = brand recognition) ────
+art_style_phrase: "soft 3D storybook render, rounded shapes, smooth pastel shading, Pixar-lite children's illustration"
+color_palette: "warm pastels — soft greens, sky blue, gentle yellow, peach; bright but never harsh"
+visual_style:
+  - "Always stylized illustration / soft 3D — NEVER photorealistic"
+  - "One clear animal subject per frame, cozy uncluttered backgrounds"
+  - "Warm soft lighting, golden-hour or soft daylight"
+  - "Repeat the art_style_phrase and the character's exact descriptors in EVERY prompt"
+negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, letters, watermark, scary, dark, harsh shadows, deformed, extra limbs, blurry, low quality"
+still_ratio: 0.65   # mostly SDXL stills + Ken Burns; ambient LTX motion for nature/weather beats
+
+# ── Narration ────────────────────────────────────────────────────────────────
+narration:
+  language: "Urdu"
+  voice: "warm gentle female storyteller"
+  pace: "slow and clear, like a bedtime story"
+  style: "simple kid-friendly Urdu; short sentences; end with the moral stated plainly"
+
+# ── Music ────────────────────────────────────────────────────────────────────
+music:
+  style: "gentle acoustic children's storytelling music, soft flute and light percussion, instrumental"
+  mood: "warm, curious, wholesome"
+  tempo: "slow to medium (70-90 bpm)"
+
+# ── Titles & SEO (top-0.1% framing) ──────────────────────────────────────────
+title_formulas:
+  - "{character} aur {lesson} — Urdu Moral Story (e.g. لالچی طوطا — A Moral Story for Kids)"
+  - "Curiosity gap + warm emotion, in Urdu script, plus a short English tail for search"
+seo_themes:
+  - "akhlaqi kahani, urdu moral story, bachon ki kahani, sabaq amoz kahani, bedtime story urdu, talking animals, kids moral lesson"
+
+# ── Local-AI generation presets (tuned for 16GB VRAM) ────────────────────────
+generation:
+  target_resolution: "1080p"          # final, after upscale
+  video_base: "1280x720"              # 720p base → upscaled to 1080p
+  clip_seconds: [5, 7]                # 5-7s clips
+  prefer: "still_pan for characters & emotion; txt2vid only for ambient motion"
+  video_model: "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+  default_loras: []
+
+avoid:
+  - "human faces or close-up humans"
+  - "violence, fear, sadness without resolution, anything restricted-mode risky"
+  - "text rendered inside the frame"
+  - "complex multi-character action in a single clip"

@@ -240,8 +240,14 @@ _engine = None
 _SessionLocal = None
 
 
-def init_db(db_path: str = "D:/ai-director/ai_director.db"):
+def init_db(db_path: str = None):
     global _engine, _SessionLocal
+    if db_path is None:
+        # Fall back to the configured DB path rather than a hardcoded drive,
+        # so standalone scripts/tests that call get_session() hit the same file
+        # the server uses.
+        from app.config import settings
+        db_path = str(settings.paths.database)
     _engine = create_engine(f"sqlite:///{db_path}", echo=False)
     Base.metadata.create_all(_engine)
     _SessionLocal = sessionmaker(bind=_engine)

@@ -1,0 +1,19 @@
+name: "Little Fairy Dreams"
+target_audience: "Young children, toddlers"
+vibe: "Soft, magical, dreamy, gentle"
+
+visual_style:
+  - "Low quality, vintage, or lo-fi aesthetic"
+  - "Soft backgrounds, blurred backgrounds, pastel colors"
+  - "Absolutely NO photorealism. Stylized, illustration, or cartoon style only."
+  - "Gentle, magical, and dream-like atmosphere"
+
+prompt_requirements:
+  - "Each scene prompt MUST explicitly state the character reference and what they look like."
+  - "Each scene prompt MUST explicitly state the scene/environment reference."
+  - "Each scene prompt MUST explicitly state the motion flow or camera movement in the text."
+  - "Ensure the narration/voiceover text matches the gentle motion."
+  - "Include phrases like 'soft focus', 'dreamy lighting', 'not realistic', 'stylized' in every visual prompt."
+
+negative_prompt_additions:
+  - "photorealistic, sharp, 4k, ultra detailed, hyperrealistic, harsh lighting, scary, fast motion"

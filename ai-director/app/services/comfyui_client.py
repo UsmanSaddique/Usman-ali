@@ -32,6 +32,16 @@ class ComfyUIClient:
         except Exception:
             return False
 
+    def wait_ready(self, timeout: float = 60.0, poll: float = 2.0) -> bool:
+        """Block until ComfyUI answers, up to `timeout`. Handles the case where
+        ComfyUI is still reloading its CUDA context after the LLM released VRAM."""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.ping():
+                return True
+            time.sleep(poll)
+        return False
+
     def submit(self, workflow: dict) -> str:
         client_id = uuid.uuid4().hex[:12]
         payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
@@ -63,6 +73,7 @@ class ComfyUIClient:
         self, prompt_id: str, timeout: int = 600, poll: float = 2.0
     ) -> dict:
         t0 = time.time()
+        last_log_time = 0
         while time.time() - t0 < timeout:
             hist = self.get_history(prompt_id)
             if hist:
@@ -73,6 +84,25 @@ class ComfyUIClient:
                 if status_str == "error":
                     msgs = hist.get("status", {}).get("messages", [])
                     raise RuntimeError(f"ComfyUI error: {msgs}")
+            
+            # Log queue status periodically
+            now = time.time()
+            if now - last_log_time > 10.0:
+                q_status = self.get_queue_status()
+                queue_running = q_status.get("queue_running", [])
+                queue_pending = q_status.get("queue_pending", [])
+                
+                is_running = any(item[1] == prompt_id for item in queue_running)
+                is_pending = any(item[1] == prompt_id for item in queue_pending)
+                
+                if is_running:
+                    logger.info(f"[ComfyUI] Generating video... (currently running)")
+                elif is_pending:
+                    logger.info(f"[ComfyUI] Waiting in queue... ({len(queue_pending)} pending)")
+                else:
+                    logger.info(f"[ComfyUI] Processing request...")
+                last_log_time = now
+
             time.sleep(poll)
         raise TimeoutError(f"ComfyUI timed out after {timeout}s")
 
@@ -95,6 +125,23 @@ class ComfyUIClient:
         raise FileNotFoundError(
             f"No output file found in ComfyUI history. Outputs: {outputs}"
         )
+
+    def free_vram(self) -> bool:
+        """Ask ComfyUI to unload its models and free GPU memory.
+        Critical on a single 16GB GPU: call before loading the LLM so the
+        director model gets the whole card (avoids CPU-offload slowdown)."""
+        try:
+            payload = json.dumps({"unload_models": True, "free_memory": True}).encode()
+            req = urllib.request.Request(
+                f"{self.base_url}/free", data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                logger.info("[ComfyUI] Requested VRAM free (unload models)")
+                return resp.status == 200
+        except Exception as e:
+            logger.debug(f"[ComfyUI] free_vram failed (non-fatal): {e}")
+            return False
 
     def get_queue_status(self) -> dict:
         try:

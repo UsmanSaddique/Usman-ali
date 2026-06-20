@@ -328,16 +328,28 @@ class AssemblerService:
         subprocess.run(cmd, capture_output=True, check=True, timeout=300)
 
     def _get_duration(self, video_path: str) -> float:
-        """Get video duration in seconds."""
+        """Get video duration in seconds.
+        Prefers ffprobe; falls back to parsing `ffmpeg -i` when ffprobe is not
+        installed (the bundled imageio_ffmpeg ships ffmpeg only, no ffprobe)."""
+        import shutil, os, re
         ffprobe = self.ffmpeg.replace("ffmpeg", "ffprobe")
-        cmd = [
-            ffprobe, "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "csv=p=0",
-            video_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if not (os.path.isabs(ffprobe) and os.path.exists(ffprobe)):
+            ffprobe = shutil.which("ffprobe")
+        if ffprobe:
+            try:
+                cmd = [ffprobe, "-v", "error", "-show_entries", "format=duration",
+                       "-of", "csv=p=0", video_path]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                return float(result.stdout.strip())
+            except Exception:
+                pass
+        # Fallback: parse Duration from `ffmpeg -i`
         try:
-            return float(result.stdout.strip())
-        except (ValueError, AttributeError):
-            return 0.0
+            out = subprocess.run([self.ffmpeg, "-i", video_path],
+                                 capture_output=True, text=True, timeout=30).stderr
+            m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", out)
+            if m:
+                return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+        except Exception:
+            pass
+        return 0.0
