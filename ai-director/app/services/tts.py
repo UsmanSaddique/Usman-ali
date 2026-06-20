@@ -343,15 +343,15 @@ class TTSService:
 
     @staticmethod
     def _get_audio_duration(audio_path: str) -> float:
-        """Get audio duration using ffprobe."""
-        cmd = [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "csv=p=0",
-            audio_path,
-        ]
+        """Duration in seconds. Reads the WAV header directly (no ffprobe needed,
+        since MMS-TTS writes WAV). Falls back to 0.0 for non-WAV/unreadable files."""
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            return float(result.stdout.strip())
-        except (subprocess.TimeoutExpired, ValueError):
-            return 0.0
+            import wave
+            with wave.open(audio_path, "rb") as w:
+                frames = w.getnframes()
+                rate = w.getframerate()
+                if rate:
+                    return frames / float(rate)
+        except Exception:
+            pass
+        return 0.0

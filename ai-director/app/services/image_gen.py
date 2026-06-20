@@ -30,6 +30,40 @@ class ImageGenService:
         self.manager = model_manager
         self.config = config
 
+    def _generate_comfyui(
+        self, prompt, negative_prompt, width, height, steps, cfg_scale, seed, output_path,
+    ) -> ImageResult:
+        """Generate an SDXL still via ComfyUI (avoids diffusers/transformers breakage)."""
+        from pathlib import Path as _P
+        from app.services.comfyui_client import ComfyUIClient, build_sdxl_workflow
+
+        client = ComfyUIClient()
+        if not client.wait_ready(30):
+            raise RuntimeError("ComfyUI not reachable for SDXL")
+        # free the LLM/other VRAM so SDXL has room
+        self.manager.unload()
+
+        ckpt = _P(str(self.config.image.path)).name
+        wf = build_sdxl_workflow(
+            prompt=prompt, negative_prompt=negative_prompt,
+            width=width, height=height, steps=steps, cfg=cfg_scale,
+            seed=seed, ckpt_name=ckpt,
+        )
+        if not output_path:
+            output_path = str(self.config.paths.assets_dir / "images" / f"img_{seed}.png")
+        _P(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        t0 = time.time()
+        prompt_id = client.submit(wf)
+        history = client.wait_for_completion(prompt_id, timeout=600, poll=1.5)
+        final = client.collect_output(history, output_path)
+        elapsed = time.time() - t0
+        logger.info(f"[ImageGen] ComfyUI SDXL {width}x{height} in {elapsed:.1f}s -> {final}")
+        return ImageResult(
+            path=final, width=width, height=height, seed=seed,
+            generation_time=elapsed, prompt_used=prompt,
+        )
+
     def generate(
         self,
         prompt: str,
@@ -58,6 +92,19 @@ class ImageGenService:
         # Handle seed
         if seed == -1:
             seed = torch.randint(0, 2**32 - 1, (1,)).item()
+
+        # Preferred: generate via ComfyUI SDXL (same backend as video/music).
+        # The diffusers path breaks on transformers 5.9 ('CLIPTextModel' has no
+        # attribute 'text_model'), so ComfyUI is the reliable route.
+        try:
+            return self._generate_comfyui(
+                prompt=prompt, negative_prompt=negative_prompt or self._default_negative(),
+                width=width, height=height, steps=steps, cfg_scale=cfg_scale,
+                seed=seed, output_path=output_path,
+            )
+        except Exception as e:
+            logger.warning(f"[ImageGen] ComfyUI SDXL failed ({e}); falling back to diffusers")
+
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
         # Load SDXL

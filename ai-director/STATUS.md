@@ -190,6 +190,24 @@ to 1080p. Budget for a 5-min video: ~75 clips × 85s ≈ 1.8h gen + overhead ≈
 because no TTS/music model is installed. Real audio needs: TTS narration (WanGP server on :5000),
 music (ACE-Step — not installed), or attach your own song file via `render(music_path=...)`.
 
+## Audio system (2026-06-20 pt4)
+
+Three audio sources, resolved in `pipeline._find_user_audio` + `generate_music`:
+1. **Your own song/voiceover (works now)** — drop `music.*` / `voice.*` into
+   `projects/<id>/audio_in/`, OR set `music_file:`/`voice_file:` in the channel YAML
+   (file in `assets_generated/music/`). User files always win over generation.
+2. **Generated music** — wired via **ComfyUI ACE-Step** (`build_acestep_workflow` in
+   comfyui_client.py; `MusicGenService._generate_comfyui`). Needs model
+   `ace_step_v1_3.5b.safetensors` in ComfyUI `models/checkpoints/` (downloading).
+   ComfyUI nodes confirmed present: TextEncodeAceStepAudio, EmptyAceStepLatentAudio,
+   VAEDecodeAudio, SaveAudioMP3.
+3. **Voiceover (TTS)** — no local Urdu TTS node; ElevenLabs nodes are cloud + need an
+   API key (none). Open: set up a local English-based TTS for Roman Urdu, or keep
+   voiceover as user-file-only.
+
+Two model downloads in progress: SDXL (`sd_xl_base_1.0.safetensors`, visual consistency)
+and ACE-Step (music). `config.image.path` now points at the SDXL file.
+
 ## Pipeline status by phase
 
 | Phase | Status | Notes |

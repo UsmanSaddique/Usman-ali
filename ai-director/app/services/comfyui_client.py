@@ -522,6 +522,35 @@ def build_wan_workflow(
     return wf
 
 
+def build_sdxl_workflow(
+    prompt: str,
+    negative_prompt: str = "",
+    width: int = 1024,
+    height: int = 1024,
+    steps: int = 30,
+    cfg: float = 7.0,
+    seed: int = 42,
+    ckpt_name: str = "sd_xl_base_1.0.safetensors",
+    output_prefix: str = "ai_director_img",
+) -> dict:
+    """ComfyUI API workflow for SDXL still-image generation.
+    Used instead of diffusers (which breaks with transformers 5.9)."""
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt_name}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["1", 1]}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["1", 1]}},
+        "4": {"class_type": "EmptyLatentImage", "inputs": {
+            "width": width, "height": height, "batch_size": 1}},
+        "5": {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0],
+            "latent_image": ["4", 0], "seed": seed, "steps": steps, "cfg": cfg,
+            "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0}},
+        "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
+        "7": {"class_type": "SaveImage", "inputs": {
+            "images": ["6", 0], "filename_prefix": output_prefix}},
+    }
+
+
 def build_acestep_workflow(
     style_tags: str,
     lyrics: str = "",

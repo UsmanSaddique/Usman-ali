@@ -224,3 +224,59 @@ Traceback (most recent call last):
   File "asyncio\events.py", line 88, in _run
   File "asyncio\proactor_events.py", line 165, in _call_connection_lost
 ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+[32m[INFO][0m Using RAM pressure cache.
+[32m[INFO][0m got prompt
+[32m[INFO][0m VAE load device: cuda:0, offload device: cpu, dtype: torch.bfloat16
+[32m[INFO][0m Found quantization metadata version 1
+[32m[INFO][0m Using MixedPrecisionOps for text encoder
+[32m[INFO][0m CLIP/text encoder model load device: cuda:0, offload device: cpu, current: cpu, dtype: torch.float16
+[32m[INFO][0m Requested to load LTXAVTEModel_
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m Model LTXAVTEModel_ prepared for dynamic VRAM loading. 11200MB Staged. 0 patches attached. Force pre-loaded 400 weights: 1749 KB.
+[32m[INFO][0m gguf qtypes: F32 (2700), BF16 (112), Q5_K (68), Q3_K (1564)
+[32m[INFO][0m model weight dtype torch.bfloat16, manual cast: None
+[32m[INFO][0m model_type FLUX
+[32m[INFO][0m Requested to load LTXAV
+[32m[INFO][0m loaded partially; 13349.36 MB usable, 13344.18 MB loaded, 75.15 MB offloaded, 5.18 MB buffer reserved, lowvram patches: 0
+  0%|          | 0/8 [00:00<?, ?it/s]  0%|          | 0/8 [00:00<?, ?it/s,   Model Initializing ...  ]  0%|          | 0/8 [00:05<?, ?it/s,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:05<00:41,  5.99s/it,  Model Initialization complete!  ] 12%|█▎        | 1/8 [00:28<00:41,  5.99s/it]                                    25%|██▌       | 2/8 [00:28<01:26, 14.37s/it] 38%|███▊      | 3/8 [00:33<00:22,  4.52s/it] 50%|█████     | 4/8 [00:38<00:21,  5.25s/it] 62%|██████▎   | 5/8 [00:43<00:14,  4.81s/it] 75%|███████▌  | 6/8 [00:47<00:09,  4.62s/it] 88%|████████▊ | 7/8 [00:52<00:04,  4.84s/it]100%|██████████| 8/8 [00:57<00:00,  4.76s/it]100%|██████████| 8/8 [00:57<00:00,  7.19s/it]
+[32m[INFO][0m Requested to load VideoVAE
+[32m[INFO][0m Unloaded partially: 12768.04 MB freed, 576.14 MB remains loaded, 656.20 MB buffer reserved, lowvram patches: 0
+[32m[INFO][0m Model VideoVAE prepared for dynamic VRAM loading. 1384MB Staged. 0 patches attached.
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for p has been set to yuv420p
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for c has been set to 19
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for s has been set to True
+[VideoHelperSuite] - [0;33mWARNING[0m - Missing input for t has been set to False
+[32m[INFO][0m [32mPrompt executed in 78.42 seconds[0m
+[32m[INFO][0m got prompt
+[32m[INFO][0m Using RAM pressure cache.
+[1m[31m[ERROR][0m !!! Exception during processing !!! shape '[2560, 2560]' is invalid for input of size 1733650
+[1m[31m[ERROR][0m Traceback (most recent call last):
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\execution.py", line 536, in execute
+    output_data, output_ui, has_subgraph, has_pending_tasks = await get_output_data(prompt_id, unique_id, obj, input_data_all, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\execution.py", line 336, in get_output_data
+    return_values = await _async_map_node_over_list(prompt_id, unique_id, obj, input_data_all, obj.FUNCTION, allow_interrupt=True, execution_block_cb=execution_block_cb, pre_execute_cb=pre_execute_cb, v3_data=v3_data)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\execution.py", line 310, in _async_map_node_over_list
+    await process_inputs(input_dict, i)
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\execution.py", line 298, in process_inputs
+    result = f(**inputs)
+             ^^^^^^^^^^^
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\nodes.py", line 607, in load_checkpoint
+    out = comfy.sd.load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, embedding_directory=folder_paths.get_folder_paths("embeddings"))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\comfy\sd.py", line 1756, in load_checkpoint_guess_config
+    sd, metadata = comfy.utils.load_torch_file(ckpt_path, return_metadata=True)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\comfy\utils.py", line 149, in load_torch_file
+    raise e
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\comfy\utils.py", line 129, in load_torch_file
+    sd, metadata = load_safetensors(ckpt)
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\comfy\utils.py", line 111, in load_safetensors
+    tensor = torch.frombuffer(mv[start:end], dtype=_TYPES[info["dtype"]]).view(info["shape"])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: shape '[2560, 2560]' is invalid for input of size 1733650
+
+[32m[INFO][0m [32mPrompt executed in 0.04 seconds[0m
+[32m[INFO][0m Using RAM pressure cache.
