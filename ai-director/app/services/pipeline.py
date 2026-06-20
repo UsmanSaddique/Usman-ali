@@ -448,6 +448,42 @@ class PipelineOrchestrator:
             self.manager.unload()
             session.close()
 
+    def _find_user_audio(self, project_id: str, kind: str) -> Optional[str]:
+        """Find a user-supplied audio file (your own song / voiceover).
+
+        Drop a file named `music.*` (background song) or `voice.*` (narration)
+        into the project's `audio_in/` folder, OR set `music_file:` / `voice_file:`
+        in the channel YAML to point at a file in `assets_generated/music/`.
+        Checked BEFORE auto-generation, so your file always wins.
+        Supported: .mp3 .wav .m4a .aac .flac .ogg
+        """
+        exts = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")
+        # 1. per-project drop-in: projects/<id>/audio_in/{music|voice}.*
+        audio_in = self.config.paths.projects_dir / project_id / "audio_in"
+        if audio_in.exists():
+            for f in sorted(audio_in.iterdir()):
+                if f.is_file() and f.stem.lower() == kind and f.suffix.lower() in exts:
+                    return str(f)
+        # 2. channel-level default from the profile (music_file / voice_file)
+        try:
+            session = get_session()
+            project = session.query(Project).get(project_id)
+            slug = project.channel.slug if project and project.channel else None
+            session.close()
+            if slug:
+                profile = self.director.load_channel_profile(slug)
+                key = f"{kind}_file"
+                ref = (profile or {}).get(key)
+                if ref:
+                    p = Path(ref)
+                    if not p.is_absolute():
+                        p = self.config.paths.assets_dir / "music" / ref
+                    if p.exists():
+                        return str(p)
+        except Exception as e:
+            logger.debug(f"[Pipeline] _find_user_audio channel lookup failed: {e}")
+        return None
+
     def _get_project_loras(self, project) -> list[tuple[str, float]]:
         """Get LoRA list from project defaults as [(filename, weight), ...]."""
         ids = project.default_lora_ids or []
@@ -475,6 +511,11 @@ class PipelineOrchestrator:
         session.flush()
 
         project = scene.project
+        # Lock ONE seed per project so every clip shares the same visual "world"
+        # (lighting, palette, character look). Random per-clip seeds were a major
+        # cause of clips looking totally different scene to scene.
+        import hashlib
+        scene_seed = int(hashlib.md5(project.id.encode()).hexdigest()[:7], 16)
         # Prioritize scene's video model, then project's, then default
         video_model = scene.video_model or getattr(project, "video_model", None) or "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
         project_loras = self._get_project_loras(project)
@@ -502,6 +543,7 @@ class PipelineOrchestrator:
                     loras=scene_loras or None,
                     width=width,
                     height=height,
+                    seed=scene_seed,
                 )
                 gen.model_used = result.model_used
                 gen.output_path = result.path
@@ -524,6 +566,7 @@ class PipelineOrchestrator:
                         loras=scene_loras or None,
                         width=width,
                         height=height,
+                        seed=scene_seed,
                     )
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
                     gen.output_path = result.path
@@ -543,6 +586,7 @@ class PipelineOrchestrator:
                         lora_weights=scene.lora_weights,
                         width=width,
                         height=height,
+                        seed=scene_seed,
                     )
                     self.manager.unload()
 
@@ -557,6 +601,7 @@ class PipelineOrchestrator:
                         loras=scene_loras or None,
                         width=width,
                         height=height,
+                        seed=scene_seed,
                     )
                     gen.model_used = f"sdxl+{result.model_used}"
                     gen.thumbnail_path = img_result.path
@@ -579,6 +624,7 @@ class PipelineOrchestrator:
                         loras=scene_loras or None,
                         width=width,
                         height=height,
+                        seed=scene_seed,
                     )
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
                     gen.output_path = result.path
@@ -594,6 +640,7 @@ class PipelineOrchestrator:
                         output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
                         lora_paths=scene.lora_ids,
                         lora_weights=scene.lora_weights,
+                        seed=scene_seed,
                     )
                     self.manager.unload()
 
@@ -1038,13 +1085,17 @@ class PipelineOrchestrator:
             session.commit()
             session.close()
 
-            # Phase 2: TTS (if narration exists) — non-fatal
+            # Phase 2: Narration — prefer a user-supplied voiceover file, else TTS
             if not narration_path:
-                try:
-                    narration_path = self.generate_tts(project_id)
-                except Exception as tts_err:
-                    logger.warning(f"[Pipeline] TTS failed (skipping narration): {tts_err}")
-                    narration_path = None
+                narration_path = self._find_user_audio(project_id, "voice")
+                if narration_path:
+                    logger.info(f"[Pipeline] Using your custom voiceover: {narration_path}")
+                else:
+                    try:
+                        narration_path = self.generate_tts(project_id)
+                    except Exception as tts_err:
+                        logger.warning(f"[Pipeline] TTS failed (skipping narration): {tts_err}")
+                        narration_path = None
 
             # Phase 3: Generate assets (video/images)
             logger.info("[Pipeline] Phase 3: Starting asset generation...")
@@ -1056,12 +1107,16 @@ class PipelineOrchestrator:
             except Exception as upscale_err:
                 logger.warning(f"[Pipeline] Upscale failed (continuing): {upscale_err}")
 
-            # Phase 5: Music — non-fatal
-            music_path = None
-            try:
-                music_path = self.generate_music(project_id)
-            except Exception as music_err:
-                logger.warning(f"[Pipeline] Music generation failed (skipping): {music_err}")
+            # Phase 5: Music — prefer a user-supplied song file, else generate
+            music_path = self._find_user_audio(project_id, "music")
+            if music_path:
+                logger.info(f"[Pipeline] Using your custom song: {music_path}")
+            else:
+                try:
+                    music_path = self.generate_music(project_id)
+                except Exception as music_err:
+                    logger.warning(f"[Pipeline] Music generation failed (skipping): {music_err}")
+                    music_path = None
 
             # Phase 6: Render
             self.render(project_id, narration_path=narration_path, music_path=music_path)

@@ -34,7 +34,7 @@ visual_style:
   - "Warm soft lighting, golden-hour or soft daylight"
   - "Repeat the art_style_phrase and the character's exact descriptors in EVERY prompt"
 negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, letters, watermark, scary, dark, harsh shadows, deformed, extra limbs, blurry, low quality"
-still_ratio: 0.65   # mostly SDXL stills + Ken Burns; ambient LTX motion for nature/weather beats
+still_ratio: 0.8   # mostly SDXL stills + Ken Burns (the CONSISTENT path); a few LTX motion beats only
 
 # ── Narration ────────────────────────────────────────────────────────────────
 narration:

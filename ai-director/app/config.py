@@ -74,7 +74,7 @@ class LLMModelConfig(BaseModel):
 class ImageModelConfig(BaseModel):
     """SDXL image generation via diffusers."""
     name: str = "sdxl-base-1.0"
-    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\stable-diffusion-xl-base-1.0")
+    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\sd_xl_base_1.0.safetensors")
     dtype: str = "float16"       # float16 or bfloat16
     scheduler: str = "euler_a"   # euler_a, dpm++_2m_karras, ddim
     default_steps: int = 30

@@ -173,6 +173,23 @@ Installing Real-ESRGAN weights + an SDXL checkpoint are the two upgrades for max
 Test files: `test_e2e.py` (full, needs LLM+ComfyUI), `resume_e2e.py <id>` (clips→render, skips
 script), `finish_e2e.py <id>` (upscale→render on existing clips).
 
+## Session 2026-06-20 (part 3): quality + resolution tuning
+
+**Consistency root cause + fix.** Clips looked totally different scene-to-scene because (a) the
+pipeline used a RANDOM seed per clip and (b) there's no image model, so every scene is an
+independent txt2vid generation. Fix: `pipeline._generate_scene` now locks ONE seed per project
+(`md5(project.id)`) across all clips → shared palette/lighting/character look. **True character
+consistency still requires an image model** (SDXL stills with locked seed + Ken Burns, or img2vid
+from one reference, or a character LoRA). Installing SDXL remains the #1 quality unlock.
+
+**Resolution measured + raised.** LTX `FAMILY_DEFAULTS` now **1152x640 @ 97 frames (~4s)** —
+measured peak ~15.8GB, ~85s/clip, no VRAM spill (720p spills and crawls 8+ min). Upscales cleanly
+to 1080p. Budget for a 5-min video: ~75 clips × 85s ≈ 1.8h gen + overhead ≈ ~2.5h (within 3.5h goal).
+
+**Audio reality.** The "beep" in the QA video was a placeholder sine wave (`sine=...`) I synthesized
+because no TTS/music model is installed. Real audio needs: TTS narration (WanGP server on :5000),
+music (ACE-Step — not installed), or attach your own song file via `render(music_path=...)`.
+
 ## Pipeline status by phase
 
 | Phase | Status | Notes |

@@ -74,6 +74,20 @@ class MusicGenService:
         t0 = time.time()
         logger.info(f"[MusicGen] Generating {duration}s track: {style_prompt[:80]}")
 
+        # Preferred: generate via ComfyUI ACE-Step (same backend as video)
+        try:
+            self._generate_comfyui(
+                style_prompt=style_prompt, duration=duration, lyrics=lyrics,
+                instrumental=instrumental, output_path=output_path,
+            )
+            elapsed = time.time() - t0
+            logger.info(f"[MusicGen] ComfyUI ACE-Step done in {elapsed:.1f}s -> {output_path}")
+            return MusicResult(path=output_path, duration=duration,
+                               sample_rate=self.config.music.default_sample_rate,
+                               style_prompt=style_prompt, generation_time=elapsed)
+        except Exception as e:
+            logger.warning(f"[MusicGen] ComfyUI ACE-Step unavailable ({e}); trying legacy paths")
+
         # Try direct Python import first, fall back to subprocess
         try:
             result = self._generate_direct(
@@ -141,6 +155,34 @@ class MusicGenService:
             output_path=output_path,
             instrumental=True,
         )
+
+    # ── ComfyUI ACE-Step Mode (preferred) ──────────────────────────────
+
+    def _generate_comfyui(
+        self, style_prompt: str, duration: int, lyrics: Optional[str],
+        instrumental: bool, output_path: str,
+    ) -> None:
+        """Generate music via ComfyUI's ACE-Step nodes."""
+        import random
+        from app.services.comfyui_client import ComfyUIClient, build_acestep_workflow
+
+        client = ComfyUIClient()
+        if not client.wait_ready(30):
+            raise RuntimeError("ComfyUI not reachable for ACE-Step music")
+
+        # Free VRAM so the music model has room
+        client.free_vram()
+        self.manager.unload()
+
+        wf = build_acestep_workflow(
+            style_tags=style_prompt,
+            lyrics="" if instrumental else (lyrics or ""),
+            seconds=float(duration),
+            seed=random.randint(0, 2**31 - 1),
+        )
+        prompt_id = client.submit(wf)
+        history = client.wait_for_completion(prompt_id, timeout=600, poll=2.0)
+        client.collect_output(history, output_path)
 
     # ── Direct Python Mode ─────────────────────────────────────────────
 

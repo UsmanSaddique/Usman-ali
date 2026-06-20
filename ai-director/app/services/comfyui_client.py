@@ -110,7 +110,7 @@ class ComfyUIClient:
         """Find the video output from history and copy it to dest_path."""
         outputs = history.get("outputs", {})
         for node_id, node_out in outputs.items():
-            for key in ("gifs", "images", "videos"):
+            for key in ("gifs", "images", "videos", "audio"):
                 for entry in node_out.get(key, []):
                     fname = entry.get("filename", "")
                     subfolder = entry.get("subfolder", "")
@@ -522,10 +522,46 @@ def build_wan_workflow(
     return wf
 
 
+def build_acestep_workflow(
+    style_tags: str,
+    lyrics: str = "",
+    seconds: float = 60.0,
+    seed: int = 42,
+    steps: int = 50,
+    cfg: float = 5.0,
+    ckpt_name: str = "ace_step_v1_3.5b.safetensors",
+    output_prefix: str = "ai_director_music",
+) -> dict:
+    """ComfyUI API workflow for ACE-Step music generation.
+    `style_tags` = comma-separated style/genre/instrument/mood prompt.
+    `lyrics` = empty string for instrumental. Output is an MP3 in ComfyUI/output."""
+    wf = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt_name}},
+        "2": {"class_type": "TextEncodeAceStepAudio", "inputs": {
+            "clip": ["1", 1], "tags": style_tags, "lyrics": lyrics, "lyrics_strength": 1.0}},
+        "3": {"class_type": "TextEncodeAceStepAudio", "inputs": {
+            "clip": ["1", 1], "tags": "", "lyrics": "", "lyrics_strength": 1.0}},
+        "4": {"class_type": "EmptyAceStepLatentAudio", "inputs": {
+            "seconds": float(seconds), "batch_size": 1}},
+        "5": {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0],
+            "latent_image": ["4", 0], "seed": seed, "steps": steps, "cfg": cfg,
+            "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+        "6": {"class_type": "VAEDecodeAudio", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
+        "7": {"class_type": "SaveAudioMP3", "inputs": {
+            "audio": ["6", 0], "filename_prefix": output_prefix, "quality": "V0"}},
+    }
+    return wf
+
+
 # Default generation params per model family
 FAMILY_DEFAULTS = {
     "ltx": {
-        "width": 768, "height": 512, "fps": 24, "num_frames": 97,
+        # Measured sweet spot for LTX-22B on a 16GB card: 1152x640 x 97 frames
+        # peaks ~15.8GB and renders in ~85s (no VRAM spill). Upscales cleanly to
+        # 1920x1080. 720p (1280x720) spills VRAM and crawls — do not raise without
+        # re-measuring peak VRAM.
+        "width": 1152, "height": 640, "fps": 24, "num_frames": 97,
         "steps": 8, "cfg": 1.0,
     },
     "ltx_dev": {

@@ -31,7 +31,7 @@ visual_style:
   - "Repeat the art_style_phrase and exact character descriptors in EVERY prompt"
   - "No depictions of sacred figures or faces; keep any mosque/architecture as gentle distant background only"
 negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, arabic calligraphy as focal text, watermark, scary, dark, harsh lighting, deformed, extra limbs, blurry, low quality"
-still_ratio: 0.7
+still_ratio: 0.8   # mostly SDXL stills + Ken Burns (consistent); few LTX motion beats
 
 narration:
   language: "Urdu"
