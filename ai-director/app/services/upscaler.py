@@ -288,14 +288,22 @@ class UpscalerService:
         """Fallback upscaler using ffmpeg lanczos scaling (no ESRGAN model needed).
         Produces clean target-resolution video; not as sharp as ESRGAN but reliable."""
         t0 = time.time()
-        vf = (f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease:flags=lanczos,"
-              f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2")
+        # Lanczos upscale + a two-pass sharpen (unsharp) + light denoise to make
+        # the soft LTX/SDXL output look crisp instead of blurry. force_original_
+        # aspect_ratio=decrease + pad avoids any stretching.
+        vf = (
+            f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease:flags=lanczos,"
+            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
+            f"unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=1.2:"
+            f"chroma_msize_x=5:chroma_msize_y=5:chroma_amount=0.4,"
+            f"hqdn3d=1.5:1.5:6:6"
+        )
         cmd = [ffmpeg_bin, "-y", "-i", input_path, "-vf", vf,
-               "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+               "-c:v", "libx264", "-preset", "slow", "-crf", "16",
                "-pix_fmt", "yuv420p", output_path]
         subprocess.run(cmd, capture_output=True, check=True, timeout=300)
-        logger.info(f"[Upscaler] ffmpeg lanczos upscale -> {target_width}x{target_height} "
-                    f"in {time.time()-t0:.1f}s (ESRGAN unavailable)")
+        logger.info(f"[Upscaler] ffmpeg lanczos+sharpen upscale -> {target_width}x{target_height} "
+                    f"in {time.time()-t0:.1f}s (ESRGAN weights not installed)")
         return UpscaleResult(
             input_path=input_path, output_path=output_path,
             input_resolution=(0, 0), output_resolution=(target_width, target_height),

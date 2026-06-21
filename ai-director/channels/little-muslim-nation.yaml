@@ -31,7 +31,8 @@ visual_style:
   - "Repeat the art_style_phrase and exact character descriptors in EVERY prompt"
   - "No depictions of sacred figures or faces; keep any mosque/architecture as gentle distant background only"
 negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, arabic calligraphy as focal text, watermark, scary, dark, harsh lighting, deformed, extra limbs, blurry, low quality"
-still_ratio: 0.8   # mostly SDXL stills + Ken Burns (consistent); few LTX motion beats
+still_ratio: 0.0   # every scene is a real animated video clip (img2vid), not a static still
+scene_type_directive: "Use scene_type 'img2vid' for EVERY scene: a consistent SDXL still then ANIMATED by LTX (real motion, not a static Ken Burns pan). Each prompt MUST describe the character DOING a gentle action + ambient motion."
 
 narration:
   language: "English"

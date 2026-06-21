@@ -75,15 +75,15 @@ Local AI cannot keep a character's face consistent across clips. Therefore:
 ## Visual Prompt Rules
 1. Write ALL visual prompts (`prompt` + `negative_prompt`) in ENGLISH — the models are English-trained and produce much better images. (Narration is a separate field and follows the channel's language.)
 2. NO readable text in frames, NO copyrighted/branded characters, NO human faces in close-up.
-3. Describe vividly: subject + exact descriptors, setting, lighting, mood, color palette, composition/camera angle, art style. 25–60 words is the sweet spot.
+3. Describe RICHLY and cinematically (45–85 words): exact character descriptors + a subtle ACTION, then layered depth (foreground/midground/background), specific textures (fluffy fur, dewy leaves, velvety petals), volumetric/golden-hour lighting with rim light and soft bokeh, atmosphere (floating pollen, drifting sparkles, soft mist), clear composition/camera angle, the art style, and SDXL quality boosters ("highly detailed, cinematic, soft volumetric lighting, depth of field, beautifully rendered"). Thin, generic prompts are NOT acceptable — make each frame look like a polished storybook illustration.
 4. Keep a consistent palette and art style across ALL scenes so the channel reads as one cohesive brand.
 5. Each clip is self-contained — assume clips are cut together with crossfades; no shot may depend on motion continuity from the previous shot.
 
 ## Scene-Type Strategy (choose deliberately per beat)
-- `still_pan` → SDXL still + Ken Burns. USE THIS MOST. Best for character close-ups, emotional moments, detailed environments, anything needing visual quality. Pair with a `camera_motion`.
-- `txt2vid` → LTX motion clip. Use ONLY for genuinely ambient motion beats (weather, water, particles, establishing nature shots). Never for character action.
-- `img2vid` → use sparingly; only when a beat truly needs a strong base image AND subtle motion.
-Respect the channel's `still_ratio` (fraction of scenes that should be still_pan).
+- `img2vid` → **USE THIS FOR ALMOST EVERY SCENE.** A consistent SDXL still is generated, then LTX ANIMATES it into a real moving video clip — the character actually moves/acts while keeping a consistent look. This is the primary tool: real motion + consistency. Write the prompt so the character is DOING something (reaching, hopping, smiling, looking around, wind blowing) so there is motion to animate.
+- `txt2vid` → LTX motion clip with no base image. Use for pure ambient/environment beats (weather, water, particles, wide nature shots) where no consistent character is needed.
+- `still_pan` → SDXL still + Ken Burns (static image, camera pan only — NO real motion). Use rarely, only for a deliberate quiet "title card" style beat.
+Default to `img2vid` unless the channel profile says otherwise. Every character scene MUST describe an action/movement.
 
 ## Retention & Story Engineering
 - Scene 1 is the HOOK: the single most beautiful/intriguing frame + a narration line that opens a curiosity gap or promises the payoff.
@@ -243,8 +243,12 @@ class DirectorService:
         # Free ComfyUI's VRAM first so the 27B LLM gets the whole 16GB GPU
         # (otherwise it spills layers to CPU → slow, ~30% GPU utilization).
         try:
+            import time as _t
             from app.services.comfyui_client import ComfyUIClient
             ComfyUIClient().free_vram()
+            _t.sleep(5)  # /free is async — let ComfyUI actually release VRAM before
+                         # the 13GB LLM loads, otherwise they contend and the LLM
+                         # spills to CPU (script gen crawls to several minutes).
         except Exception:
             pass
 
@@ -315,6 +319,72 @@ Generate the full object now with all {num_scenes} scenes inside the "scenes" ar
         script_data = self._parse_script_response(raw_text)
 
         return script_data
+
+    def enhance_prompts(self, scenes: list[dict], channel_slug: str) -> list[dict]:
+        """Second-pass 'prompt engineer': rewrite each scene's visual prompt to be
+        far richer and more cinematic (texture, layered depth, volumetric lighting,
+        atmosphere, composition, SDXL quality boosters) while KEEPING the exact
+        character descriptors + art style so consistency is preserved.
+
+        `scenes`: [{scene_number, prompt, negative_prompt}]  ->  enhanced same shape.
+        One batched LLM call for all scenes.
+        """
+        profile = self.load_channel_profile(channel_slug)
+        art_style = (profile or {}).get("art_style_phrase", "")
+        palette = (profile or {}).get("color_palette", "")
+        char_bible = (profile or {}).get("character_bible", [])
+
+        try:
+            from app.services.comfyui_client import ComfyUIClient
+            ComfyUIClient().free_vram()
+            import time as _t; _t.sleep(5)
+        except Exception:
+            pass
+        llm = self.manager.load(ModelType.LLM).model
+
+        sys_prompt = f"""You are a WORLD-CLASS AI image prompt engineer for SDXL, specializing in gorgeous children's storybook art.
+Rewrite each scene's visual prompt to be DRAMATICALLY richer and more cinematic, while preserving consistency.
+
+KEEP EXACTLY (do not change):
+- The character's exact physical descriptors (species, colors, signature items).
+- The art style: {art_style or 'soft 3D storybook render, pastel'}
+- The palette: {palette or 'warm pastels'}
+
+ADD to every prompt (this is the enhancement):
+- Rich TEXTURE detail (fluffy fur with soft strands, dewy leaves, velvety petals, soft fabric)
+- LAYERED DEPTH: foreground + midground + background elements, soft depth-of-field / bokeh
+- VOLUMETRIC, CINEMATIC LIGHTING (warm rim light, god rays, soft golden-hour glow, gentle bounce light)
+- ATMOSPHERE (floating pollen, drifting sparkles, soft mist, dust motes in light)
+- COMPOSITION (clear focal point, rule-of-thirds, appealing camera angle)
+- A subtle ACTION the character is doing (so it animates well)
+- SDXL quality boosters: "highly detailed, cinematic, beautifully rendered, soft volumetric lighting, depth of field, masterpiece"
+- 45-85 words each. ENGLISH only. NEVER add readable text, human faces, or watermarks.
+
+Character bible (use exact descriptors when a character appears):
+{chr(10).join('- ' + c for c in char_bible) if char_bible else '(none)'}
+
+Respond with ONLY JSON:
+{{"enhanced": [{{"scene_number": 1, "prompt": "<rich enhanced prompt>", "negative_prompt": "<negatives>"}}]}}"""
+
+        user_msg = "Enhance these scene prompts (keep character + style identical, make them cinematic and detailed):\n\n"
+        for s in scenes:
+            user_msg += f'Scene {s["scene_number"]}: {s.get("prompt","")}\n'
+
+        resp = llm.create_chat_completion(
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_msg}],
+            temperature=0.8, max_tokens=self.config.llm.max_tokens,
+            response_format={"type": "json_object"}, stream=False,
+        )
+        raw = resp["choices"][0]["message"].get("content", "") or ""
+        try:
+            data = json.loads(self._clean_json(raw))
+        except json.JSONDecodeError:
+            data = self._salvage_truncated(self._clean_json(raw))
+            data = {"enhanced": data.get("scenes", [])}
+        out = data.get("enhanced") or data.get("scenes") or []
+        logger.info(f"[Director] Enhanced {len(out)} scene prompts")
+        return out
 
     def refine_prompt(
         self,
@@ -411,9 +481,12 @@ Respond with ONLY JSON:
         try:
             data = json.loads(clean)
         except json.JSONDecodeError as e:
-            logger.error(f"[Director] JSON parse error: {e}")
-            logger.error(f"[Director] Raw text: {raw_text[:500]}")
-            raise ValueError(f"Director produced invalid JSON: {e}")
+            logger.warning(f"[Director] JSON parse failed ({e}); attempting salvage of complete scenes")
+            data = self._salvage_truncated(clean)
+            if not data.get("scenes"):
+                logger.error(f"[Director] Salvage found no scenes. Raw head: {raw_text[:400]}")
+                raise ValueError(f"Director produced invalid JSON: {e}")
+            logger.info(f"[Director] Salvaged {len(data['scenes'])} complete scenes from truncated output")
 
         # Resilience: the model occasionally returns the scenes in a different
         # shape — a bare list, or a single scene object instead of the wrapper.
@@ -454,6 +527,44 @@ Respond with ONLY JSON:
             tags=data.get("tags", []) or [],
             hashtags=data.get("hashtags", []) or [],
         )
+
+    @staticmethod
+    def _salvage_truncated(text: str) -> dict:
+        """Recover a usable script from truncated/invalid JSON by extracting every
+        COMPLETE balanced {...} scene object inside the "scenes" array, plus the
+        top-level string fields via regex. Lets a cut-off LLM response still produce
+        a video instead of hard-failing."""
+        import re
+        out = {}
+        for key in ("title", "music_style", "music_mood", "thumbnail_prompt", "description"):
+            m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+            if m:
+                out[key] = m.group(1)
+        scenes = []
+        si = text.find('"scenes"')
+        if si != -1:
+            start = text.find('[', si)
+            if start != -1:
+                depth = 0
+                obj_start = None
+                for idx in range(start, len(text)):
+                    c = text[idx]
+                    if c == '{':
+                        if depth == 0:
+                            obj_start = idx
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth == 0 and obj_start is not None:
+                            try:
+                                scenes.append(json.loads(text[obj_start:idx + 1]))
+                            except Exception:
+                                pass
+                            obj_start = None
+                    elif c == ']' and depth == 0:
+                        break
+        out["scenes"] = scenes
+        return out
 
     @staticmethod
     def _clean_json(text: str) -> str:

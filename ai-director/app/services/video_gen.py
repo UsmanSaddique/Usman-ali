@@ -132,6 +132,10 @@ class VideoGenService:
                 "ComfyUI is not reachable at 127.0.0.1:8188 after 60s. "
                 "Start ComfyUI (and make sure nothing else is hogging the 16GB GPU)."
             )
+        # CRITICAL on 16GB: LTX-22B (~13GB) does not fit alongside a cached SDXL
+        # checkpoint (~6.5GB) — it spills to shared RAM and crawls (275s/step).
+        # Free ComfyUI's other models first so LTX gets the whole card.
+        self.comfy_client.free_vram()
 
         if not model_filename:
             model_filename = Path(self.config.video.model_path).name
@@ -160,7 +164,35 @@ class VideoGenService:
         
         logger.info(f"[VideoGen] ComfyUI generation {mode}: {model_filename}")
 
-        if family == "ltx":
+        if family == "ltx" and mode == "img2vid" and image_path:
+            # Animate the (consistent SDXL) still with LTX — real character motion,
+            # not a Ken Burns pan. Copy the still into ComfyUI/input so LoadImage finds it.
+            from app.services.comfyui_client import build_ltx_img2vid_workflow
+            import shutil
+            comfy_input = Path(
+                r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\input"
+            )
+            comfy_input.mkdir(parents=True, exist_ok=True)
+            img_name = f"i2v_src_{seed}{Path(image_path).suffix or '.png'}"
+            shutil.copy2(image_path, comfy_input / img_name)
+            logger.info(f"[VideoGen] LTX img2vid from still: {img_name}")
+            # Push the model toward visible MOTION (the still alone yields a near-static
+            # clip). Append dynamic-motion cues and discourage stillness.
+            motion_prompt = (
+                f"{prompt}, the subject moving and acting with lively dynamic motion, "
+                f"gentle natural movement, subtle camera push-in, grass and leaves swaying in the breeze"
+            )
+            motion_negative = (
+                f"{negative_prompt}, static, still image, frozen, motionless, no movement"
+            )
+            workflow = build_ltx_img2vid_workflow(
+                model_filename=model_filename, image_filename=img_name,
+                prompt=motion_prompt, negative_prompt=motion_negative,
+                width=width, height=height, num_frames=num_frames,
+                steps=steps, cfg=cfg_scale, seed=seed, fps=fps,
+                strength=0.5, loras=loras,
+            )
+        elif family == "ltx":
             workflow = build_ltx_workflow(
                 model_filename=model_filename,
                 prompt=prompt,
@@ -191,13 +223,8 @@ class VideoGenService:
         else:
             raise ValueError(f"Unknown model family: {family}")
 
-        # Inject image path for img2vid if needed
-        if mode == "img2vid" and image_path:
-            # Find the load image node if we extended build_*_workflow, 
-            # or dynamically add it here.
-            # Currently comfyui_client.py doesn't have img2vid native support,
-            # so we log a warning and just run txt2vid for now.
-            logger.warning(f"img2vid not fully implemented for {family} via ComfyUI, running as txt2vid.")
+        if mode == "img2vid" and image_path and family != "ltx":
+            logger.warning(f"img2vid not implemented for {family}; ran as txt2vid.")
 
         t0 = time.time()
         

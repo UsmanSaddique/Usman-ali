@@ -34,7 +34,8 @@ visual_style:
   - "Warm soft lighting, golden-hour or soft daylight"
   - "Repeat the art_style_phrase and the character's exact descriptors in EVERY prompt"
 negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, letters, watermark, scary, dark, harsh shadows, deformed, extra limbs, blurry, low quality"
-still_ratio: 0.8   # mostly SDXL stills + Ken Burns (the CONSISTENT path); a few LTX motion beats only
+still_ratio: 0.0   # NO static stills — every scene is a real animated video clip
+scene_type_directive: "Use scene_type 'img2vid' for EVERY scene: generate a consistent SDXL still then ANIMATE it with LTX so the character actually MOVES (real video, not a static Ken Burns pan). Each scene prompt MUST describe the character DOING an action (hopping, reaching, smiling, looking around, etc.) and any ambient motion (wind, leaves, sparkles)."
 
 # ── Narration ────────────────────────────────────────────────────────────────
 narration:

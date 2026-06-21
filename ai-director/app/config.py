@@ -60,9 +60,9 @@ class LLMModelConfig(BaseModel):
     name: str = "qwen2.5:32b"    # Ollama fallback model id (only if local GGUF missing)
     base_url: str = "http://localhost:11434"
     temperature: float = 0.7
-    max_tokens: int = 4096
-    n_ctx: int = 8192            # room for the large elite prompt + a full script's output
-                                 # (fits VRAM now that ComfyUI is freed + n_batch is small)
+    max_tokens: int = 8192       # a 12-15 scene script + SEO can exceed 4096 → was truncating
+    n_ctx: int = 16384           # prompt (~3k) + full script output (~8k). This Qwen is a
+                                 # Mamba-hybrid (tiny recurrent KV ~150MB) so large context is cheap.
     model_path: Optional[Path] = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\Qwen3.6-27B-Q3_K_S.gguf")
     n_gpu_layers: int = -1       # -1 = offload all layers to GPU
     n_batch: int = 512           # small batch → small compute buffer (frees VRAM for layers)

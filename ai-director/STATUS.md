@@ -196,14 +196,19 @@ Three audio sources, resolved in `pipeline._find_user_audio` + `generate_music`:
 1. **Your own song/voiceover (works now)** — drop `music.*` / `voice.*` into
    `projects/<id>/audio_in/`, OR set `music_file:`/`voice_file:` in the channel YAML
    (file in `assets_generated/music/`). User files always win over generation.
-2. **Generated music** — wired via **ComfyUI ACE-Step** (`build_acestep_workflow` in
-   comfyui_client.py; `MusicGenService._generate_comfyui`). Needs model
-   `ace_step_v1_3.5b.safetensors` in ComfyUI `models/checkpoints/` (downloading).
-   ComfyUI nodes confirmed present: TextEncodeAceStepAudio, EmptyAceStepLatentAudio,
-   VAEDecodeAudio, SaveAudioMP3.
-3. **Voiceover (TTS)** — no local Urdu TTS node; ElevenLabs nodes are cloud + need an
-   API key (none). Open: set up a local English-based TTS for Roman Urdu, or keep
-   voiceover as user-file-only.
+2. **Generated music — ✅ VERIFIED.** ComfyUI ACE-Step (`build_acestep_workflow`,
+   `MusicGenService._generate_comfyui`). Model `ace_step_v1_3.5b.safetensors` (7.17GB,
+   1903 tensors) in ComfyUI `models/checkpoints/`. Generated a 30s vocal song (44.1kHz
+   stereo) in ~14s at 60 steps. Does instrumental (instrumental=True) AND vocal songs
+   with lyrics (instrumental=False, pass `lyrics`), multilingual (English/Urdu/Hindi).
+   NOTE: first download was a truncated/corrupt partial (4.9 of 7.17GB) → "shape invalid"
+   crash; re-download WITHOUT `curl -C -` fixed it. A hung curl can lock the file (kill it
+   to delete).
+3. **Voiceover (TTS) — ✅ VERIFIED, local.** Rewrote `tts.py` to use Meta MMS-TTS via
+   transformers VitsModel (no server, no API key). English (`mms-tts-eng`) verified; Urdu
+   has NO standalone MMS voice (HF 401) so "urdu"→`mms-tts-hin` (Hindi=Hindustani, sounds
+   like spoken Urdu, needs Devanagari input). Samples in `assets_generated/tts_samples/`.
+   Channels switched to English narration; `language:` in YAML controls it.
 
 Two model downloads in progress: SDXL (`sd_xl_base_1.0.safetensors`, visual consistency)
 and ACE-Step (music). `config.image.path` now points at the SDXL file.

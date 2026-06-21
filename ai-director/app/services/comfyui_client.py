@@ -317,6 +317,75 @@ def build_ltx_workflow(
     return wf
 
 
+def build_ltx_img2vid_workflow(
+    model_filename: str,
+    image_filename: str,          # file already placed in ComfyUI/input/
+    prompt: str,
+    negative_prompt: str = "",
+    width: int = 768,
+    height: int = 512,
+    num_frames: int = 97,
+    steps: int = 8,
+    cfg: float = 1.0,
+    seed: int = 42,
+    fps: int = 24,
+    strength: float = 0.5,   # LOWER = MORE motion. 1.0 glued the clip to the still (looked static);
+                             # 0.5 gives strong visible movement while keeping the character's look (measured 22 vs 3.4).
+    loras: list[tuple[str, float]] = None,
+    output_prefix: str = "ai_director_i2v",
+) -> dict:
+    """LTX image-to-video: animate a still (an SDXL character frame) so the
+    character/scene actually MOVES while keeping the still's look. Consistent
+    character WITH motion (vs Ken Burns, which only pans a static image)."""
+    is_gguf = model_filename.lower().endswith(".gguf")
+    wf = {}
+    n = [0]
+    def nid():
+        n[0] += 1; return str(n[0])
+
+    model_node = nid()
+    wf[model_node] = ({"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": model_filename}}
+                      if is_gguf else
+                      {"class_type": "UNETLoader", "inputs": {"unet_name": model_filename, "weight_dtype": "default"}})
+    clip_node = nid()
+    wf[clip_node] = {"class_type": "DualCLIPLoader", "inputs": {
+        "clip_name1": "gemma_3_12B_it_fp4_mixed.safetensors",
+        "clip_name2": "ltx-2.3_text_projection_bf16.safetensors", "type": "ltxv"}}
+    vae_node = nid()
+    wf[vae_node] = {"class_type": "VAELoader", "inputs": {"vae_name": "LTX23_video_vae_bf16.safetensors"}}
+
+    cur_model = [model_node, 0]; cur_clip = [clip_node, 0]
+    if loras:
+        for lora_file, weight in loras:
+            ln = nid()
+            wf[ln] = {"class_type": "LoraLoader", "inputs": {
+                "model": cur_model, "clip": cur_clip, "lora_name": lora_file,
+                "strength_model": weight, "strength_clip": weight}}
+            cur_model = [ln, 0]; cur_clip = [ln, 1]
+
+    pos = nid(); wf[pos] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": cur_clip}}
+    neg = nid(); wf[neg] = {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt or "", "clip": cur_clip}}
+    img = nid(); wf[img] = {"class_type": "LoadImage", "inputs": {"image": image_filename}}
+
+    i2v = nid()
+    wf[i2v] = {"class_type": "LTXVImgToVideo", "inputs": {
+        "positive": [pos, 0], "negative": [neg, 0], "vae": [vae_node, 0],
+        "image": [img, 0], "width": width, "height": height,
+        "length": num_frames, "batch_size": 1, "strength": strength}}
+
+    samp = nid()
+    wf[samp] = {"class_type": "KSampler", "inputs": {
+        "model": cur_model, "positive": [i2v, 0], "negative": [i2v, 1],
+        "latent_image": [i2v, 2], "seed": seed, "steps": steps, "cfg": cfg,
+        "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0}}
+    dec = nid(); wf[dec] = {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": [vae_node, 0]}}
+    save = nid(); wf[save] = {"class_type": "VHS_VideoCombine", "inputs": {
+        "images": [dec, 0], "frame_rate": fps, "loop_count": 0,
+        "filename_prefix": output_prefix, "format": "video/h264-mp4",
+        "save_output": True, "pingpong": False}}
+    return wf
+
+
 def build_wan_workflow(
     model_filename: str,
     prompt: str,
