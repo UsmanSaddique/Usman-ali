@@ -44,10 +44,11 @@ class ImageGenService:
         self.manager.unload()
 
         ckpt = _P(str(self.config.image.path)).name
+        style_loras = [tuple(x) for x in getattr(self.config.image, "style_loras", []) or []]
         wf = build_sdxl_workflow(
             prompt=prompt, negative_prompt=negative_prompt,
             width=width, height=height, steps=steps, cfg=cfg_scale,
-            seed=seed, ckpt_name=ckpt,
+            seed=seed, ckpt_name=ckpt, loras=style_loras or None,
         )
         if not output_path:
             output_path = str(self.config.paths.assets_dir / "images" / f"img_{seed}.png")

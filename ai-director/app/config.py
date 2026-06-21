@@ -83,6 +83,12 @@ class ImageModelConfig(BaseModel):
     default_height: int = 720
     enable_vae_slicing: bool = False
     enable_vae_tiling: bool = False
+    # Style + character LoRAs applied to SDXL stills, as [(filename, weight)].
+    # pixar-style pushes SDXL base toward the 3D cartoon look; add trained
+    # character LoRAs here later for a consistent recurring cast.
+    # pixar-style for the 3D cartoon look + trained character LoRAs for a consistent cast.
+    # Tuned weights: too high (0.9+) over-bakes and adds noise; ~0.5 = clean + consistent.
+    style_loras: list = [("pixar-style.safetensors", 0.6), ("yusuf_v1.safetensors", 0.5)]
 
 
 class VideoModelConfig(BaseModel):

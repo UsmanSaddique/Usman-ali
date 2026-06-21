@@ -15,22 +15,21 @@ episode_structure:
   - "RESOLUTION: the character practices the good deed and feels the goodness of it"
   - "CLOSING: restate the value warmly (e.g. shukar, sabr, sachai) + a peaceful loopable frame"
 
-character_system: "Talking animals only — friendly, modest, wholesome. Repeat EXACT descriptors every scene."
+character_system: "Recurring cast of CARTOON Muslim kids (Pixar-style 3D, NOT realistic). Repeat the EXACT descriptors below every scene so the cast stays identical. A trained character LoRA locks them further."
 character_bible:
-  - "Tota (parrot): a gentle green parrot with a soft white chest"
-  - "Khargosh (rabbit): a small white rabbit with long ears and kind eyes"
-  - "Dada Ullu (wise elder owl): a calm brown owl with round glasses, the gentle teacher"
-  - "Bakri (goat kid): a tiny cream goat with a little bell"
+  - "Yusuf (boy, 3-4 yrs): cute chubby-cheeked 3D cartoon boy, white knit prayer cap (taqiyah), short brown curly hair, big warm brown eyes, sky-blue kurta with white embroidery, friendly smile"
+  - "Maryam (girl, 3-4 yrs): cute 3D cartoon girl, soft mint-teal hijab, big bright green eyes, rosy cheeks, gentle teal dress, sweet smile"
+  - "Aisha (girl, 3-4 yrs): cute 3D cartoon girl, soft pink hijab, big brown eyes, rosy cheeks, light pink dress, cheerful smile"
 
-art_style_phrase: "soft 3D storybook render, rounded gentle shapes, warm pastel shading, calm children's illustration"
-color_palette: "calm warm tones — soft greens, cream, sky blue, gentle gold; serene and peaceful"
+art_style_phrase: "soft 3D Pixar-style cartoon render, big expressive eyes, rounded chubby features, smooth subsurface skin shading, glossy highlights, polished children's animation movie look"
+color_palette: "bright cheerful pastels — sky blue, mint, pink, cream, soft gold; sunny and warm"
 visual_style:
-  - "Stylized illustration / soft 3D only — NEVER photorealistic"
-  - "Modest, wholesome, serene scenes; nature, gardens, cozy homes, mosques as soft background shapes"
-  - "Warm soft daylight; peaceful uncluttered compositions"
-  - "Repeat the art_style_phrase and exact character descriptors in EVERY prompt"
-  - "No depictions of sacred figures or faces; keep any mosque/architecture as gentle distant background only"
-negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, arabic calligraphy as focal text, watermark, scary, dark, harsh lighting, deformed, extra limbs, blurry, low quality"
+  - "Polished 3D animated-movie CARTOON style (like a modern kids feature film) — NEVER photorealistic, never realistic skin"
+  - "Cute stylized Muslim kids with big eyes and rounded faces; modest dress, hijab for girls, taqiyah/kurta for boy"
+  - "Charming wholesome settings: sunny pastel old-town streets, gardens, cozy homes, mosque domes softly in the background"
+  - "Warm cinematic daylight, soft depth of field, bokeh background, beautifully rendered"
+  - "Repeat the art_style_phrase and each character's EXACT descriptors in EVERY prompt they appear in"
+negative_prompt_additions: "photorealistic, realistic skin, real human photo, uncanny, text, watermark, scary, dark, harsh lighting, deformed, extra limbs, extra fingers, blurry, low quality, immodest clothing"
 still_ratio: 0.0   # every scene is a real animated video clip (img2vid), not a static still
 scene_type_directive: "Use scene_type 'img2vid' for EVERY scene: a consistent SDXL still then ANIMATED by LTX (real motion, not a static Ken Burns pan). Each prompt MUST describe the character DOING a gentle action + ambient motion."
 

@@ -146,6 +146,14 @@ class UpscalerService:
 
             # Step 2: Upscale each frame — fall back to ffmpeg scaling if the
             # Real-ESRGAN model/weights aren't installed.
+            # Preferred: real AI upscale via ComfyUI 4x ESRGAN (crisp detail).
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return self._comfyui_esrgan_upscale(input_path, output_path,
+                                                    target_width, target_height, ffmpeg_bin)
+            except Exception as e:
+                logger.warning(f"[Upscaler] ComfyUI ESRGAN failed ({e}); trying python ESRGAN")
+                frames_in.mkdir(parents=True, exist_ok=True); frames_out.mkdir(parents=True, exist_ok=True)
             try:
                 loaded = self.manager.load(ModelType.UPSCALER)
                 upsampler = loaded.model
@@ -283,6 +291,35 @@ class UpscalerService:
         except Exception:
             return False
 
+    def _comfyui_esrgan_upscale(self, input_path, output_path, target_width, target_height,
+                                ffmpeg_bin) -> "UpscaleResult":
+        """4x ESRGAN (4x-UltraSharp) upscale via ComfyUI then downscale to target —
+        genuine detail, not a smeared lanczos resize."""
+        import shutil as _sh
+        from pathlib import Path as _P
+        from app.services.comfyui_client import ComfyUIClient, build_esrgan_video_upscale_workflow
+        client = ComfyUIClient()
+        if not client.wait_ready(30):
+            raise RuntimeError("ComfyUI not reachable for ESRGAN upscale")
+        client.free_vram()
+        comfy_in = _P(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\input")
+        comfy_in.mkdir(parents=True, exist_ok=True)
+        name = f"up_{_P(input_path).stem}{_P(input_path).suffix or '.mp4'}"
+        _sh.copy2(input_path, comfy_in / name)
+        # detect fps from the source so we don't change playback speed
+        fps = self._get_video_fps(input_path, ffmpeg_bin)
+        t0 = time.time()
+        wf = build_esrgan_video_upscale_workflow(
+            video_filename=name, target_width=target_width, target_height=target_height, fps=fps)
+        pid = client.submit(wf)
+        hist = client.wait_for_completion(pid, timeout=1200, poll=2.0)
+        _P(output_path).parent.mkdir(parents=True, exist_ok=True)
+        client.collect_output(hist, output_path)
+        logger.info(f"[Upscaler] ComfyUI 4x ESRGAN -> {target_width}x{target_height} in {time.time()-t0:.0f}s")
+        return UpscaleResult(input_path=input_path, output_path=output_path,
+                             input_resolution=(0, 0), output_resolution=(target_width, target_height),
+                             processing_time=time.time() - t0, frame_count=0)
+
     def _ffmpeg_upscale(self, input_path, output_path, target_width, target_height,
                         ffmpeg_bin) -> "UpscaleResult":
         """Fallback upscaler using ffmpeg lanczos scaling (no ESRGAN model needed).
@@ -291,12 +328,12 @@ class UpscalerService:
         # Lanczos upscale + a two-pass sharpen (unsharp) + light denoise to make
         # the soft LTX/SDXL output look crisp instead of blurry. force_original_
         # aspect_ratio=decrease + pad avoids any stretching.
+        # lanczos scale + mild unsharp only. NO hqdn3d — the denoise smeared the
+        # output into a "watery/paper" look.
         vf = (
             f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
-            f"unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=1.2:"
-            f"chroma_msize_x=5:chroma_msize_y=5:chroma_amount=0.4,"
-            f"hqdn3d=1.5:1.5:6:6"
+            f"unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.8"
         )
         cmd = [ffmpeg_bin, "-y", "-i", input_path, "-vf", vf,
                "-c:v", "libx264", "-preset", "slow", "-crf", "16",

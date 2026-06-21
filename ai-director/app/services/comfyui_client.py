@@ -601,22 +601,65 @@ def build_sdxl_workflow(
     seed: int = 42,
     ckpt_name: str = "sd_xl_base_1.0.safetensors",
     output_prefix: str = "ai_director_img",
+    loras: list[tuple[str, float]] = None,
 ) -> dict:
     """ComfyUI API workflow for SDXL still-image generation.
-    Used instead of diffusers (which breaks with transformers 5.9)."""
-    return {
+    Used instead of diffusers (which breaks with transformers 5.9).
+    `loras`: optional [(filename, weight)] — e.g. a Pixar-style LoRA and/or a
+    trained character LoRA, chained onto the model+clip."""
+    wf = {
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt_name}},
-        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["1", 1]}},
-        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["1", 1]}},
+    }
+    cur_model = ["1", 0]
+    cur_clip = ["1", 1]
+    nid = 10
+    for lora_file, weight in (loras or []):
+        node = str(nid); nid += 1
+        wf[node] = {"class_type": "LoraLoader", "inputs": {
+            "model": cur_model, "clip": cur_clip, "lora_name": lora_file,
+            "strength_model": weight, "strength_clip": weight}}
+        cur_model = [node, 0]; cur_clip = [node, 1]
+    wf.update({
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": cur_clip}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": cur_clip}},
         "4": {"class_type": "EmptyLatentImage", "inputs": {
             "width": width, "height": height, "batch_size": 1}},
         "5": {"class_type": "KSampler", "inputs": {
-            "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0],
+            "model": cur_model, "positive": ["2", 0], "negative": ["3", 0],
             "latent_image": ["4", 0], "seed": seed, "steps": steps, "cfg": cfg,
             "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0}},
         "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
         "7": {"class_type": "SaveImage", "inputs": {
             "images": ["6", 0], "filename_prefix": output_prefix}},
+    })
+    return wf
+
+
+def build_esrgan_video_upscale_workflow(
+    video_filename: str,         # file already in ComfyUI/input/
+    target_width: int = 1920,
+    target_height: int = 1080,
+    fps: float = 24.0,
+    model_name: str = "4x-UltraSharp.pth",
+    output_prefix: str = "ai_director_hd",
+) -> dict:
+    """Real AI upscale of a video clip via ComfyUI: load frames -> 4x ESRGAN
+    (adds genuine detail/sharpness) -> downscale to target (crisp) -> recombine.
+    Far better than lanczos+sharpen (which just smears soft input)."""
+    return {
+        "1": {"class_type": "VHS_LoadVideo", "inputs": {
+            "video": video_filename, "force_rate": 0, "custom_width": 0, "custom_height": 0,
+            "frame_load_cap": 0, "skip_first_frames": 0, "select_every_nth": 1}},
+        "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model_name}},
+        "3": {"class_type": "ImageUpscaleWithModel", "inputs": {
+            "upscale_model": ["2", 0], "image": ["1", 0]}},
+        "4": {"class_type": "ImageScale", "inputs": {
+            "image": ["3", 0], "upscale_method": "lanczos",
+            "width": target_width, "height": target_height, "crop": "disabled"}},
+        "5": {"class_type": "VHS_VideoCombine", "inputs": {
+            "images": ["4", 0], "frame_rate": fps, "loop_count": 0,
+            "filename_prefix": output_prefix, "format": "video/h264-mp4",
+            "pingpong": False, "save_output": True}},
     }
 
 
