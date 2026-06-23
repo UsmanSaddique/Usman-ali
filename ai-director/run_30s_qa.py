@@ -1,5 +1,5 @@
 """
-30s/40s kids Islamic video — dynamic LLM prompt generation.
+2-min Dada Abu Quran Story (Old MacDonald Islamic Version).
 Uses DirectorService to generate proper, descriptive scenes based on context.
 """
 import sys, os, time, subprocess, re
@@ -25,16 +25,31 @@ ch = s.query(Channel).filter(Channel.slug == "little-muslim-nation").first()
 
 print("1. Generating Dynamic LLM Script via AI Director...")
 script = director.generate_script(
-    title="Yusuf and Amina: Wheels on the Bus (Islamic Version)",
-    duration=60,
-    context="A cute, magical 3D Pixar-style animated Islamic version of Wheels on the Bus. Yusuf (a cute 5 year old Muslim boy) and Amina (a cute 4 year old Muslim girl) take a joyful ride on a bright yellow school bus and arrive at a beautiful mosque. Write incredibly rich, descriptive visual prompts for each scene that maintain the character descriptions exactly and show them performing distinct actions. Include dynamic camera motions like 'pan_right' or 'zoom_in'.",
+    title="Dada Abu's Quran Story (Old MacDonald Islamic Version)",
+    duration=120,
+    context=(
+        "A cute, magical 3D Pixar-style animated Islamic kids video inspired by 'Old MacDonald Had a Farm' "
+        "but reimagined as 'Old Dada Abu Had a Quran Pak'. "
+        "Dada Abu is a lovable old Muslim grandfather — round face, long fluffy white beard, warm brown skin, "
+        "kind crinkly eyes behind small round glasses, white prayer cap (topi), long flowing white cotton kurta, "
+        "always holding a beautiful golden Quran. He lives on a peaceful little Islamic homestead/garden. "
+        "Each verse introduces a different cute 3D animal friend (a fluffy white lamb, a soft brown camel, a colorful parrot, "
+        "a little orange cat, a gentle donkey) and Dada Abu teaches them a small Islamic lesson "
+        "(saying Bismillah, being kind, sharing food, making dua, saying Alhamdulillah). "
+        "The structure follows Old MacDonald exactly: 'Old Dada Abu had a Quran, Alhamdulillah! "
+        "And with that Quran he taught a [animal], Alhamdulillah! With a [lesson] here and a [lesson] there...' "
+        "Write incredibly rich, detailed 3D Pixar-style visual prompts. Each scene must describe Dada Abu's exact appearance "
+        "consistently and include the specific animal and action. CRITICAL: Frame the shots as wide shots or full-body medium shots so the characters are NOT too zoomed in. "
+        "Use dynamic camera motions like zoom_out, pan_right, pan_left. "
+        "Include peaceful outdoor garden/farm settings with golden hour lighting, soft bokeh, and warm saturated colors."
+    ),
     channel_slug=ch.slug,
-    num_scenes=12
+    num_scenes=20
 )
 director.manager.unload()
 
-proj = Project(title=script.title, channel_id=ch.id, duration_target=60,
-               num_scenes_target=len(script.scenes), context="60s kids islamic wheels on the bus, dynamic LLM generation",
+proj = Project(title=script.title, channel_id=ch.id, duration_target=120,
+               num_scenes_target=len(script.scenes), context="2min Dada Abu Quran Story, Old MacDonald Islamic, 20x6s, dynamic LLM",
                status=ProjectStatus.APPROVED,
                video_model="LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf", total_scenes=len(script.scenes))
 s.add(proj); s.flush(); pid = proj.id
@@ -46,39 +61,48 @@ for sc_plan in script.scenes:
         scene_type=SceneType.TXT2VID,
         prompt=sc_plan.prompt,
         negative_prompt=sc_plan.negative_prompt,
-        duration=5.0,
-        camera_motion=sc_plan.camera_motion or "zoom_in",
+        duration=6.0,
+        camera_motion=sc_plan.camera_motion or "zoom_out",
         status=SceneStatus.PENDING
     ))
 s.commit(); s.close()
 
-print(f"Project {pid[:8]} | {len(script.scenes)} TXT2VID scenes (~60s) | AI Generated Script | 1080p\n")
+print(f"Project {pid[:8]} | {len(script.scenes)} TXT2VID scenes (~2min, 20x6s) | AI Generated Script | 1080p\n")
 
 proj_dir = settings.paths.projects_dir / pid
 song = str(proj_dir / "song.mp3")
 LYRICS = (
     "[chorus]\n"
-    "The wheels on the bus go round and round,\n"
-    "Round and round, round and round!\n"
-    "The wheels on the bus go round and round,\n"
-    "All through the town!\n"
+    "Old Dada Abu had a Quran, Alhamdulillah!\n"
+    "And with that Quran he taught us all, Alhamdulillah!\n"
+    "With a Bismillah here and a Bismillah there,\n"
+    "Here a dua, there a dua, everywhere a dua dua,\n"
+    "Old Dada Abu had a Quran, Alhamdulillah!\n"
     "[verse]\n"
-    "We say Bismillah when we take our seat,\n"
-    "Take our seat, take our seat,\n"
-    "We say Bismillah when we take our seat,\n"
-    "Before we eat and play!\n"
+    "Old Dada Abu had a little lamb, Alhamdulillah!\n"
+    "And he taught that lamb to be so kind, Alhamdulillah!\n"
+    "With a share share here and a share share there,\n"
+    "Here a gift, there a gift, everywhere a gift gift,\n"
+    "Old Dada Abu had a little lamb, Alhamdulillah!\n"
+    "[verse]\n"
+    "Old Dada Abu had a little cat, Alhamdulillah!\n"
+    "And he taught that cat to say Salam, Alhamdulillah!\n"
+    "With a Salam here and a Salam there,\n"
+    "Here a smile, there a smile, everywhere a smile smile,\n"
+    "Old Dada Abu had a little cat, Alhamdulillah!\n"
     "[chorus]\n"
-    "The wheels on the bus go round and round,\n"
-    "Round and round, round and round,\n"
-    "Alhamdulillah for the friends we found,\n"
-    "All through the town!\n"
+    "Old Dada Abu had a Quran, Alhamdulillah!\n"
+    "And with that Quran he taught us all, Alhamdulillah!\n"
+    "With a thank you here and a thank you there,\n"
+    "Here Alhamdulillah, there Alhamdulillah, everywhere Alhamdulillah,\n"
+    "Old Dada Abu had a Quran, Alhamdulillah!\n"
 )
 try:
     from app.services.music_gen import MusicGenService
-    music_prompt = script.music_style + ", cocomelon style nursery rhyme for kids, cheerful children's choir vocals, bright bouncy upbeat melody, simple catchy repetitive sing-along hook, claps and xylophone and ukulele, major key, wholesome, kids pop"
+    music_prompt = script.music_style + ", high quality professional studio recording, clear sweet children vocals, upbeat acoustic guitar and xylophone, catchy educational kids nursery rhyme, happy bouncy melody, clean sound, major key, pop"
     MusicGenService(mm, settings).generate(
         style_prompt=music_prompt,
-        duration=60, lyrics=LYRICS, instrumental=False, output_path=song)
+        duration=120, lyrics=LYRICS, instrumental=False, output_path=song)
     print("[song] ok")
 except Exception as e:
     print("song:", e); song = None
