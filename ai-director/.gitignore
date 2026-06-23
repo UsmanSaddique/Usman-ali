@@ -78,3 +78,6 @@ Thumbs.db
 0.2.75
 {app
 {frontend,scripts,app
+
+# ─── Claude Code local settings ───
+.claude/settings.local.json

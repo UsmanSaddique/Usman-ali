@@ -1,5 +1,26 @@
 # AI Director — Status & Resume Guide
-_Last verified: 2026-06-20_
+_Last verified: 2026-06-23_
+
+---
+
+## ⭐ Latest progress (2026-06-23) — quality, speed & UI
+
+**Visual quality (the big wins):**
+- Root cause of the old "oil-painting / brush-stroke" look was the **base SDXL still**, not the upscaler. Fixes: render the still at SDXL's native ~1MP (not the small video res) + a **two-pass hires-fix** refine pass (`build_sdxl_workflow(hires=True)`, config `image.min_gen_height/hires*`), and — biggest jump — swapped the painterly `pixar-style` LoRA for the **Samaritan 3D Cartoon** style LoRA (`models/loras/samaritan-3d-cartoon-lora.safetensors`, from HF `Muapi/samaritan-3d-cartoon-sdxl`). `config.image.style_loras = [(samaritan 0.9),(yusuf 0.5)]`.
+- **Real 4K/upscale**: `upscaler.py` uses ComfyUI ESRGAN (needs ComfyUI running, else falls back to blurry lanczos). For **cartoon edges** use the **anime** model (`RealESRGAN_x4plus_anime_6B.pth`, now in `models/upscale_models/`, `config.upscale.use_anime_model=True`) — clean hair/shirt edges, no ringing. Pipeline now supports true 4K: `assembler` res_map has `4k/2160p`, `pipeline.render(resolution=...)` override.
+- LTX `img2vid_strength` 0.5→0.6 (config `video.img2vid_strength`) keeps more of the still's face in the video.
+
+**Best content approach = Character Bible + LTX txt2vid** (no per-scene SDXL): fixed STYLE block + fixed CHARACTER block repeated every scene + locked seed → consistent character, clean Pixar look, and avoids the slow SDXL↔LTX swap. See `run_poem_t2v.py`, `run_30s_qa.py`.
+
+**Speed / 16GB reality:** the slow part is **model reload**, not sampling. LTX-22B (14GB) + Gemma-12B encoder (11GB) can't coexist in 16GB → ~13GB reloads per scene (~2-4 min/scene, non-deterministic). Keep gen res **≤832×480** (16:9) — at 1024×576 it FULL-spills to system RAM (49s/step crawl). `start_generation(batch=True)` frees VRAM once up-front to help the model stay resident.
+
+**Wan 2.2 ti2v 5B = the FAST path** (wired + tested): `build_wan22_ti2v_workflow()` (uses `Wan22ImageToVideoLatent`); 5B (9.4GB)+umt5(6.3GB)+wan2.2 vae fit resident → no reload, ~73s/clip. Rougher claymation look vs LTX's cleaner Pixar. Routed in `video_gen` for wan `ti2v`/`5b` filenames. (The old `build_wan_workflow` is defined twice & uses the wrong latent node — don't use it.)
+
+**UI (`frontend/index.html`, app on :8000 via `run.py`, honors `PORT` env):** model-grid cards now show speed/quality **tier badges** (⚡Fast Wan-5B / ★Best-quality LTX-22B) + hints; **"⚡ Batch all clips"** toggle → `start_generation(batch=)`; Channels tab gained a **"+ New Channel"** create form (was read-only) wired to `POST /api/channels`.
+
+**Cocomelon-style songs (ACE-Step):** style prompt "cocomelon style nursery rhyme, children's choir, bouncy, catchy repetitive sing-along hook, claps+xylophone+ukulele, major key"; lyrics use a short `[chorus]` hook repeated top & bottom.
+
+**Known gotcha:** force-killing servers leaves orphaned LISTEN sockets on port 8000 (preview/run.py); use `PORT` env or reboot to free it. ComfyUI zombie jobs survive client kill & spill VRAM → restart ComfyUI to clear.
 
 ## Product direction (the goal)
 A **multi-channel local video factory**: define channels modeled on real successful
