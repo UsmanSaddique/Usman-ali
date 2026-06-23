@@ -696,6 +696,15 @@ tr { cursor: pointer; }
         </div>
       </div>
 
+      <!-- Final rendered video -->
+      <div class="card mt-16 hidden" id="final-video-card">
+        <h3 class="flex-between">
+          <span>🎬 Final Video</span>
+          <a id="final-download" class="btn-success btn-sm" href="#" download>⬇ Download MP4</a>
+        </h3>
+        <video id="final-video-player" controls style="width:100%; border-radius:8px; margin-top:8px; background:#000;"></video>
+      </div>
+
       <!-- Live Pipeline Logs Monitor -->
       <div class="card mt-16 hidden" id="project-logs-card">
         <h3 class="flex-between">
@@ -970,7 +979,8 @@ function renderProjectSilent() {
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     case 'rendered':
-      btns = `<button class="btn-success">Download</button>`;
+      btns = `<a class="btn-success" href="/projects/${p.id}/final_render.mp4" download>⬇ Download MP4</a>
+              <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
     case 'failed':
       btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume Generation</button>
@@ -1153,7 +1163,8 @@ function renderProject() {
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     case 'rendered':
-      btns = `<button class="btn-success">Download</button>`;
+      btns = `<a class="btn-success" href="/projects/${p.id}/final_render.mp4" download>⬇ Download MP4</a>
+              <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
     case 'failed':
       btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume Generation</button>
@@ -1165,6 +1176,20 @@ function renderProject() {
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
   }
   actions.innerHTML = btns;
+
+  // Final video card — show the rendered result with a player + download
+  const finalCard = document.getElementById('final-video-card');
+  if (finalCard) {
+    if (p.status === 'rendered') {
+      const url = `/projects/${p.id}/final_render.mp4?t=${Date.now()}`;
+      const player = document.getElementById('final-video-player');
+      if (player.getAttribute('src') !== url) player.src = url;
+      document.getElementById('final-download').href = `/projects/${p.id}/final_render.mp4`;
+      finalCard.classList.remove('hidden');
+    } else {
+      finalCard.classList.add('hidden');
+    }
+  }
 
   // Show/hide progress
   const isProgressRunning = ['generating','upscaling','assembling','music','scripting'].includes(p.status);

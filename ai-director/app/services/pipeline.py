@@ -1120,9 +1120,11 @@ class PipelineOrchestrator:
                         logger.warning(f"[Pipeline] TTS failed (skipping narration): {tts_err}")
                         narration_path = None
 
-            # Phase 3: Generate assets (video/images)
+            # Phase 3: Generate assets (video/images).
+            # 832x480 = 16:9 (YouTube-native) AND VRAM-safe for LTX-22B on 16GB
+            # (1024x576 spills to system RAM). batch=True keeps the model resident.
             logger.info("[Pipeline] Phase 3: Starting asset generation...")
-            self.start_generation(project_id)
+            self.start_generation(project_id, width=832, height=480, batch=True)
 
             # Phase 4: Upscale
             try:
