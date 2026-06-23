@@ -335,6 +335,25 @@ tr { cursor: pointer; }
   align-items: center;
   gap: 3px;
 }
+.model-card .tier-badge {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+.tier-badge.tier-fast    { background: rgba(34,197,94,0.18);  color: #4ade80; }
+.tier-badge.tier-quality { background: rgba(168,85,247,0.18); color: #c084fc; }
+.tier-badge.tier-heavy   { background: rgba(251,146,60,0.18); color: #fb923c; }
+.tier-badge.tier-balanced{ background: rgba(148,163,184,0.18);color: #94a3b8; }
+.model-card .model-card-hint {
+  margin-top: 8px;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border, rgba(148,163,184,0.15));
+  padding-top: 6px;
+}
 
 /* ── LoRA Toggle Cards ───────────────────────────────────────── */
 .lora-grid {
@@ -729,7 +748,10 @@ tr { cursor: pointer; }
 
     <!-- ═════ PAGE: Channels ═════ -->
     <div id="page-channels" class="page hidden">
-      <div class="page-header"><h2>Channel Profiles</h2></div>
+      <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h2>Channel Profiles</h2>
+        <button class="btn-primary" onclick="openChannelModal()">+ New Channel</button>
+      </div>
       <div class="card">
         <div class="table-wrap">
           <table>
@@ -775,10 +797,17 @@ tr { cursor: pointer; }
         <label>Resolution</label>
         <select id="gen-resolution" class="input">
           <option value="">Default (From Model)</option>
+          <option value="832x480">832x480 (16:9, VRAM-safe)</option>
           <option value="768x512">768x512 (Landscape)</option>
           <option value="512x768">512x768 (Portrait)</option>
           <option value="1280x720">1280x720 (HD)</option>
         </select>
+      </div>
+      <div class="form-group full">
+        <label class="flex items-center gap-2" style="cursor:pointer">
+          <input type="checkbox" id="gen-batch" style="width:auto">
+          <span>⚡ Batch all clips (queue scenes back-to-back to keep the model resident — helps LTX-22B avoid reloads between scenes)</span>
+        </label>
       </div>
       <div class="form-group full">
         <div class="section-label">LoRAs (optional)</div>
@@ -790,6 +819,49 @@ tr { cursor: pointer; }
         <span class="btn-icon">▶</span> Start Generation
       </button>
       <button class="btn-outline" onclick="closeGenerateModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ New Channel Modal ═══ -->
+<div class="modal-overlay hidden" id="channel-modal">
+  <div class="modal">
+    <h3>New Channel</h3>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="ch-name" class="input" placeholder="Little Muslim Nation" oninput="document.getElementById('ch-slug').value=this.value.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')">
+      </div>
+      <div class="form-group">
+        <label>Slug</label>
+        <input type="text" id="ch-slug" class="input" placeholder="little-muslim-nation">
+      </div>
+      <div class="form-group">
+        <label>Still Ratio (0–1)</label>
+        <input type="number" id="ch-still-ratio" class="input" value="0.4" min="0" max="1" step="0.1">
+      </div>
+      <div class="form-group">
+        <label>Resolution</label>
+        <select id="ch-resolution" class="input">
+          <option value="1080p">1080p</option>
+          <option value="2k">2K (1440p)</option>
+          <option value="4k">4K (2160p)</option>
+          <option value="720p">720p</option>
+        </select>
+      </div>
+      <div class="form-group full">
+        <label class="flex items-center gap-2" style="cursor:pointer">
+          <input type="checkbox" id="ch-kids" style="width:auto"> <span>Made for kids</span>
+        </label>
+      </div>
+      <div class="form-group full">
+        <label>System Prompt / Director Notes (optional)</label>
+        <textarea id="ch-system-prompt" class="input" rows="3" placeholder="Character bible, art style, language directives…"></textarea>
+      </div>
+    </div>
+    <div class="btn-group mt-16">
+      <button class="btn-primary" onclick="createChannel()">Create Channel</button>
+      <button class="btn-outline" onclick="document.getElementById('channel-modal').classList.add('hidden')">Cancel</button>
     </div>
   </div>
 </div>
@@ -1179,15 +1251,30 @@ function getModelDefaults(filename) {
       frames: '97–161',
     };
   } else if (fn.includes('wan')) {
-    const is5b = fn.includes('5b');
+    const is5b = fn.includes('5b') || fn.includes('ti2v');
     return {
-      res: is5b ? '832×480' : '832×480',
-      fps: is5b ? 16 : 16,
-      steps: fn.includes('lightx2v') ? 4 : 30,
-      frames: '81',
+      res: '832×480',
+      fps: is5b ? 24 : 16,
+      steps: fn.includes('lightx2v') ? 4 : (is5b ? 24 : 30),
+      frames: is5b ? '97' : '81',
     };
   }
   return { res: '768×512', fps: 24, steps: 20, frames: '97' };
+}
+
+// Speed/quality guidance shown on each model card so you can choose the tradeoff.
+function getModelTier(filename) {
+  const fn = filename.toLowerCase();
+  if (fn.includes('wan') && (fn.includes('5b') || fn.includes('ti2v')))
+    return { label: '⚡ Fast', cls: 'tier-fast',
+             hint: 'Fits in 16GB — no reload, steady ~1 min/scene. Rougher claymation look.' };
+  if (fn.includes('ltx') && fn.includes('22b'))
+    return { label: '★ Best quality', cls: 'tier-quality',
+             hint: 'Cleanest Pixar look. Slower: 22B+12B encoder reload each scene on 16GB.' };
+  if (fn.includes('wan') && fn.includes('14b'))
+    return { label: '◆ Heavy', cls: 'tier-heavy',
+             hint: '14B — high quality but tight on 16GB; use 4-step LoRA for speed.' };
+  return { label: '◐ Balanced', cls: 'tier-balanced', hint: '' };
 }
 
 function renderModelCards() {
@@ -1207,18 +1294,20 @@ function renderModelCards() {
 
   grid.innerHTML = _availableModels.map(m => {
     const defaults = getModelDefaults(m.filename);
+    const tier = getModelTier(m.filename);
     const isSelected = hiddenInput.value === m.filename;
     const shortName = m.filename
       .replace('.gguf', '').replace('.safetensors', '')
       .replace(/_/g, ' ').replace(/-/g, ' ');
     return `
-      <div class="model-card ${isSelected ? 'selected' : ''}" 
-           onclick="selectModel('${m.filename}')" 
+      <div class="model-card ${isSelected ? 'selected' : ''}"
+           onclick="selectModel('${m.filename}')"
            data-model="${m.filename}">
         <div class="model-card-name">${shortName}</div>
         <div class="model-card-meta">
           <span class="family-badge ${m.family}">${m.family.toUpperCase()}</span>
           <span class="size-tag">${m.size_gb} GB</span>
+          <span class="tier-badge ${tier.cls}">${tier.label}</span>
         </div>
         <div class="model-card-defaults">
           <span>📐 ${defaults.res}</span>
@@ -1226,6 +1315,7 @@ function renderModelCards() {
           <span>⚡ ${defaults.steps} steps</span>
           <span>🎬 ${defaults.frames}f</span>
         </div>
+        ${tier.hint ? `<div class="model-card-hint">${tier.hint}</div>` : ''}
       </div>
     `;
   }).join('');
@@ -1428,7 +1518,8 @@ async function submitGenerateScenes() {
       lora_ids: selectedLoras.ids,
       lora_weights: selectedLoras.weights,
       width: width,
-      height: height
+      height: height,
+      batch: document.getElementById('gen-batch')?.checked || false
     };
     
     // alert('Sending request: ' + JSON.stringify(payload));
@@ -1595,6 +1686,33 @@ async function loadChannelsDropdown() {
       `<option value="${c.slug}">${esc(c.name)}</option>`
     ).join('');
   } catch(e) {}
+}
+
+function openChannelModal() {
+  ['ch-name','ch-slug','ch-system-prompt'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('ch-still-ratio').value = '0.4';
+  document.getElementById('ch-resolution').value = '1080p';
+  document.getElementById('ch-kids').checked = false;
+  document.getElementById('channel-modal').classList.remove('hidden');
+}
+
+async function createChannel() {
+  const name = document.getElementById('ch-name').value.trim();
+  const slug = document.getElementById('ch-slug').value.trim();
+  if (!name || !slug) { alert('Name and slug are required'); return; }
+  try {
+    await api('/api/channels', 'POST', {
+      name, slug,
+      system_prompt: document.getElementById('ch-system-prompt').value,
+      still_ratio: parseFloat(document.getElementById('ch-still-ratio').value) || 0.4,
+      target_resolution: document.getElementById('ch-resolution').value,
+      made_for_kids: document.getElementById('ch-kids').checked,
+    });
+    document.getElementById('channel-modal').classList.add('hidden');
+    loadChannels();
+  } catch(e) {
+    alert('Failed to create channel: ' + e.message);
+  }
 }
 
 // ── LoRAs ──────────────────────────────────────────────────────

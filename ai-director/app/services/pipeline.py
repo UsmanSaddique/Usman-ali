@@ -304,11 +304,17 @@ class PipelineOrchestrator:
 
     # ── Phase 3: Asset Generation ──────────────────────────────────────
 
-    def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None):
+    def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None, batch: bool = False):
         """
         Generate all scene assets one by one.
         If scene_ids is provided, only generate those specific scenes.
+        `batch=True` keeps the video model resident across scenes (skips the
+        per-scene local-model unload) so a same-model run (e.g. LTX-22B txt2vid)
+        doesn't pay an avoidable reload between scenes.
         """
+        self._batch_mode = batch
+        if batch:
+            logger.info("[Pipeline] Batch mode: keeping video model resident across scenes")
         session = get_session()
         try:
             project = session.query(Project).get(project_id)
@@ -335,6 +341,16 @@ class PipelineOrchestrator:
             images_dir.mkdir(parents=True, exist_ok=True)
 
             scene_times = []
+
+            # Batch mode: free VRAM ONCE up front (e.g. evict the ACE-Step music
+            # model) so the video model has the whole 16GB to stay resident across
+            # scenes instead of being evicted/reloaded between them.
+            if batch:
+                try:
+                    from app.services.comfyui_client import ComfyUIClient
+                    ComfyUIClient().free_vram()
+                except Exception as e:
+                    logger.warning(f"[Pipeline] batch free_vram failed: {e}")
 
             for i, scene in enumerate(scenes):
                 self._check_cancel()
@@ -911,8 +927,12 @@ class PipelineOrchestrator:
         project_id: str,
         narration_path: Optional[str] = None,
         music_path: Optional[str] = None,
+        resolution: Optional[str] = None,
     ):
-        """Assemble all clips + audio into final video."""
+        """Assemble all clips + audio into final video.
+
+        `resolution` overrides the channel default (e.g. "4k" for 3840x2160).
+        """
         session = get_session()
         try:
             project = session.query(Project).get(project_id)
@@ -967,20 +987,21 @@ class PipelineOrchestrator:
             output_path = str(project_dir / "final_render.mp4")
 
             channel = project.channel
+            out_resolution = resolution or channel.target_resolution
 
             result = self.assembler.assemble(
                 clips=clips,
                 output_path=output_path,
                 narration_path=narration_path,
                 music_path=music_path,
-                resolution=channel.target_resolution,
+                resolution=out_resolution,
                 transition_duration=self.config.generation.transition_duration,
             )
 
             # Save render job
             render_job = RenderJob(
                 project_id=project_id,
-                resolution=channel.target_resolution,
+                resolution=out_resolution,
                 output_path=result.output_path,
                 status=RenderStatus.COMPLETED,
                 progress_pct=100.0,

@@ -45,10 +45,28 @@ class ImageGenService:
 
         ckpt = _P(str(self.config.image.path)).name
         style_loras = [tuple(x) for x in getattr(self.config.image, "style_loras", []) or []]
+
+        # "Extra effort": render the still at SDXL's native pixel budget (not the
+        # small video res), preserving aspect, so faces/eyes/hands resolve. The
+        # video stage downsizes the bigger still (supersampling = cleaner frames).
+        ic = self.config.image
+        gen_w, gen_h = width, height
+        min_h = getattr(ic, "min_gen_height", 0) or 0
+        if min_h and height < min_h:
+            aspect = width / height
+            gen_h = min_h
+            gen_w = int(round((min_h * aspect) / 8) * 8)
+            gen_h = int(round(gen_h / 8) * 8)
+            logger.info(f"[ImageGen] still upscaled {width}x{height} -> {gen_w}x{gen_h} for SDXL quality")
+
         wf = build_sdxl_workflow(
             prompt=prompt, negative_prompt=negative_prompt,
-            width=width, height=height, steps=steps, cfg=cfg_scale,
+            width=gen_w, height=gen_h, steps=steps, cfg=cfg_scale,
             seed=seed, ckpt_name=ckpt, loras=style_loras or None,
+            hires=bool(getattr(ic, "hires", False)),
+            hires_scale=float(getattr(ic, "hires_scale", 1.5)),
+            hires_denoise=float(getattr(ic, "hires_denoise", 0.45)),
+            hires_steps=int(getattr(ic, "hires_steps", 0)),
         )
         if not output_path:
             output_path = str(self.config.paths.assets_dir / "images" / f"img_{seed}.png")
@@ -59,9 +77,12 @@ class ImageGenService:
         history = client.wait_for_completion(prompt_id, timeout=600, poll=1.5)
         final = client.collect_output(history, output_path)
         elapsed = time.time() - t0
-        logger.info(f"[ImageGen] ComfyUI SDXL {width}x{height} in {elapsed:.1f}s -> {final}")
+        out_w = int(round(gen_w * (self.config.image.hires_scale if getattr(ic, "hires", False) else 1)))
+        out_h = int(round(gen_h * (self.config.image.hires_scale if getattr(ic, "hires", False) else 1)))
+        logger.info(f"[ImageGen] ComfyUI SDXL {gen_w}x{gen_h}"
+                    f"{f' -> hires {out_w}x{out_h}' if getattr(ic,'hires',False) else ''} in {elapsed:.1f}s -> {final}")
         return ImageResult(
-            path=final, width=width, height=height, seed=seed,
+            path=final, width=out_w, height=out_h, seed=seed,
             generation_time=elapsed, prompt_used=prompt,
         )
 

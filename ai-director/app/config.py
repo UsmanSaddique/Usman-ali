@@ -77,10 +77,19 @@ class ImageModelConfig(BaseModel):
     path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\sd_xl_base_1.0.safetensors")
     dtype: str = "float16"       # float16 or bfloat16
     scheduler: str = "euler_a"   # euler_a, dpm++_2m_karras, ddim
-    default_steps: int = 30
+    default_steps: int = 30      # 30 base + hires pass is plenty with the Samaritan LoRA (faster than 40)
     default_cfg: float = 7.0
     default_width: int = 1280
     default_height: int = 720
+    # "Extra effort" still quality. SDXL base is weak/soft at <768px and single-pass;
+    # render the still at its native ~1MP budget and add a hires-fix refine pass so
+    # faces/eyes/hands actually resolve. The video stage downsizes the bigger still
+    # (supersampling = cleaner final frames).
+    min_gen_height: int = 768    # floor the still height to an SDXL bucket (16:9 -> ~1368x768, avoids duplication)
+    hires: bool = True           # two-pass hires-fix refine
+    hires_scale: float = 1.5
+    hires_denoise: float = 0.45
+    hires_steps: int = 15        # refine pass; 15 is enough at denoise 0.45 (faster)
     enable_vae_slicing: bool = False
     enable_vae_tiling: bool = False
     # Style + character LoRAs applied to SDXL stills, as [(filename, weight)].
@@ -88,7 +97,9 @@ class ImageModelConfig(BaseModel):
     # character LoRAs here later for a consistent recurring cast.
     # pixar-style for the 3D cartoon look + trained character LoRAs for a consistent cast.
     # Tuned weights: too high (0.9+) over-bakes and adds noise; ~0.5 = clean + consistent.
-    style_loras: list = [("pixar-style.safetensors", 0.6), ("yusuf_v1.safetensors", 0.5)]
+    # Samaritan 3D Cartoon gives a clean crisp 3D render (pixar-style.safetensors on
+    # SDXL base looked like a smeared oil painting). Keep yusuf for character identity.
+    style_loras: list = [("samaritan-3d-cartoon-lora.safetensors", 0.9), ("yusuf_v1.safetensors", 0.5)]
 
 
 class VideoModelConfig(BaseModel):
@@ -106,6 +117,9 @@ class VideoModelConfig(BaseModel):
     default_steps: int = 8        # distilled = fewer steps
     default_cfg: float = 1.0      # distilled models use low cfg
     seed: int = -1                # -1 = random
+    # img2vid: higher = clip stays closer to the (clean) still -> less hair/shirt
+    # edge warping, calmer motion (good for gentle poem/nasheed videos).
+    img2vid_strength: float = 0.7
 
 
 class VideoModelAltConfig(BaseModel):
@@ -129,7 +143,7 @@ class UpscaleModelConfig(BaseModel):
     scale: int = 4
     tile_size: int = 512         # lower = less VRAM, slower
     tile_pad: int = 10
-    use_anime_model: bool = False  # per-channel override
+    use_anime_model: bool = True   # 3D-cartoon content: anime ESRGAN = clean hair/shirt edges (no ringing), faster
 
 
 class MusicModelConfig(BaseModel):

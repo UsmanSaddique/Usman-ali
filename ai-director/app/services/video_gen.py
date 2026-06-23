@@ -178,9 +178,11 @@ class VideoGenService:
             logger.info(f"[VideoGen] LTX img2vid from still: {img_name}")
             # Push the model toward visible MOTION (the still alone yields a near-static
             # clip). Append dynamic-motion cues and discourage stillness.
+            # Generic motion cues only — do NOT inject scene-specific scenery
+            # (e.g. "grass and leaves swaying" added grass to an indoor party room).
             motion_prompt = (
                 f"{prompt}, the subject moving and acting with lively dynamic motion, "
-                f"gentle natural movement, subtle camera push-in, grass and leaves swaying in the breeze"
+                f"gentle natural movement, subtle camera push-in"
             )
             motion_negative = (
                 f"{negative_prompt}, static, still image, frozen, motionless, no movement"
@@ -190,7 +192,9 @@ class VideoGenService:
                 prompt=motion_prompt, negative_prompt=motion_negative,
                 width=width, height=height, num_frames=num_frames,
                 steps=steps, cfg=cfg_scale, seed=seed, fps=fps,
-                strength=0.5, loras=loras,
+                # 0.6 keeps more of the (now hires) still's face/detail than 0.5
+                # while still giving clear motion — preserves image quality into video.
+                strength=getattr(self.config.video, "img2vid_strength", 0.6), loras=loras,
             )
         elif family == "ltx":
             workflow = build_ltx_workflow(
@@ -207,19 +211,30 @@ class VideoGenService:
                 loras=loras,
             )
         elif family == "wan":
-            workflow = build_wan_workflow(
-                model_filename=model_filename,
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_frames=num_frames,
-                steps=steps,
-                cfg=cfg_scale,
-                seed=seed,
-                fps=fps,
-                loras=loras,
-            )
+            # Wan 2.2 ti2v 5B = the FAST path (fits resident in 16GB, no reload).
+            # Use the correct ti2v builder for the 5B; legacy builder for others.
+            if "ti2v" in model_filename.lower() or "5b" in model_filename.lower():
+                from app.services.comfyui_client import build_wan22_ti2v_workflow
+                workflow = build_wan22_ti2v_workflow(
+                    model_filename=model_filename, prompt=prompt,
+                    negative_prompt=negative_prompt, width=width, height=height,
+                    num_frames=num_frames, steps=steps or 24, cfg=cfg_scale or 5.0,
+                    seed=seed, fps=fps, loras=loras,
+                )
+            else:
+                workflow = build_wan_workflow(
+                    model_filename=model_filename,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    width=width,
+                    height=height,
+                    num_frames=num_frames,
+                    steps=steps,
+                    cfg=cfg_scale,
+                    seed=seed,
+                    fps=fps,
+                    loras=loras,
+                )
         else:
             raise ValueError(f"Unknown model family: {family}")
 

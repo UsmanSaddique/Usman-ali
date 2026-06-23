@@ -306,19 +306,80 @@ class UpscalerService:
         comfy_in.mkdir(parents=True, exist_ok=True)
         name = f"up_{_P(input_path).stem}{_P(input_path).suffix or '.mp4'}"
         _sh.copy2(input_path, comfy_in / name)
-        # detect fps from the source so we don't change playback speed
         fps = self._get_video_fps(input_path, ffmpeg_bin)
+        # total frames
+        import subprocess as _sp, re as _re
+        info = _sp.run([ffmpeg_bin, "-i", input_path], capture_output=True, text=True).stderr
+        total = 0
+        m = _re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", info)
+        if m:
+            dur = int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3))
+            total = int(round(dur * fps))
+        CHUNK = 16  # frames per ESRGAN pass — keeps the 4x batch within 16GB
+        # For 3D-cartoon content use the ANIME ESRGAN model: it gives clean smooth
+        # hair/shirt edges instead of the ringing/over-sharpened edges 4x-UltraSharp
+        # (a photoreal model) produces — and it's a smaller/faster net.
+        up_cfg = getattr(self.config, "upscale", None)
+        model_name = "4x-UltraSharp.pth"
+        if up_cfg is not None:
+            anime = getattr(up_cfg, "anime_model_path", None)
+            if getattr(up_cfg, "use_anime_model", False) and anime is not None:
+                model_name = _P(str(anime)).name
         t0 = time.time()
-        wf = build_esrgan_video_upscale_workflow(
-            video_filename=name, target_width=target_width, target_height=target_height, fps=fps)
-        pid = client.submit(wf)
-        hist = client.wait_for_completion(pid, timeout=1200, poll=2.0)
-        _P(output_path).parent.mkdir(parents=True, exist_ok=True)
-        client.collect_output(hist, output_path)
-        logger.info(f"[Upscaler] ComfyUI 4x ESRGAN -> {target_width}x{target_height} in {time.time()-t0:.0f}s")
+        out_dir = _P(output_path).parent; out_dir.mkdir(parents=True, exist_ok=True)
+        chunk_files = []
+        offset = 0
+        idx = 0
+        # If we couldn't determine the frame count, don't risk submitting chunks
+        # past the end of the video (which errors) — process the whole clip at once.
+        single_pass = total <= 0
+        while True:
+            client.free_vram()
+            prefix = f"hdchunk_{_P(input_path).stem}_{idx}"
+            cap = 0 if single_pass else CHUNK
+            wf = build_esrgan_video_upscale_workflow(
+                video_filename=name, target_width=target_width, target_height=target_height,
+                fps=fps, output_prefix=prefix, frame_load_cap=cap, skip_first_frames=offset,
+                model_name=model_name)
+            pid = client.submit(wf)
+            try:
+                hist = client.wait_for_completion(pid, timeout=900, poll=2.0)
+                cf = str(out_dir / f"{prefix}.mp4")
+                client.collect_output(hist, cf)
+                chunk_files.append(cf)
+            except Exception as e:
+                # A chunk starting past the last frame (frame-count rounding) yields
+                # no output — tolerate it once we already have frames, else re-raise.
+                if chunk_files and not single_pass:
+                    logger.warning(f"[Upscaler] chunk {idx} produced no output ({e}); stopping")
+                    break
+                raise
+            offset += CHUNK; idx += 1
+            if single_pass:
+                break
+            if offset >= total:
+                break
+            if idx > 64:  # safety
+                break
+        # concat chunks
+        if len(chunk_files) == 1:
+            _sh.copy2(chunk_files[0], output_path)
+        else:
+            lst = str(out_dir / f"_concat_{_P(input_path).stem}.txt")
+            with open(lst, "w") as f:
+                for c in chunk_files:
+                    f.write(f"file '{_P(c).as_posix()}'\n")
+            _sp.run([ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", lst,
+                     "-c", "copy", output_path], capture_output=True, timeout=300)
+            try: os.remove(lst)
+            except Exception: pass
+        for c in chunk_files:
+            try: os.remove(c)
+            except Exception: pass
+        logger.info(f"[Upscaler] ComfyUI 4x ESRGAN ({idx} chunks) -> {target_width}x{target_height} in {time.time()-t0:.0f}s")
         return UpscaleResult(input_path=input_path, output_path=output_path,
                              input_resolution=(0, 0), output_resolution=(target_width, target_height),
-                             processing_time=time.time() - t0, frame_count=0)
+                             processing_time=time.time() - t0, frame_count=total)
 
     def _ffmpeg_upscale(self, input_path, output_path, target_width, target_height,
                         ffmpeg_bin) -> "UpscaleResult":

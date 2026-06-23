@@ -236,6 +236,7 @@ class GenerateScenesReq(BaseModel):
     lora_weights: list[float] = []
     width: Optional[int] = None
     height: Optional[int] = None
+    batch: bool = False   # keep the video model resident across scenes (skip per-scene unload)
 
 class UpdateSceneReq(BaseModel):
     prompt: Optional[str] = None
@@ -455,7 +456,8 @@ def generate_scenes(project_id: str, req: GenerateScenesReq, db: Session = Depen
 
     def run():
         try:
-            pipeline.start_generation(project_id, scene_ids=req.scene_ids, width=req.width, height=req.height)
+            pipeline.start_generation(project_id, scene_ids=req.scene_ids,
+                                      width=req.width, height=req.height, batch=req.batch)
         except Exception as e:
             logger.error(f"Generation failed: {e}", exc_info=True)
 

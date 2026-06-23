@@ -10,10 +10,12 @@ import uvicorn
 from app.config import settings
 
 if __name__ == "__main__":
+    # Allow PORT env override (e.g. preview/dev tooling) without editing config.
+    port = int(os.environ.get("PORT", settings.port))
     uvicorn.run(
         "app.main:app",
         host=settings.host,
-        port=settings.port,
+        port=port,
         reload=settings.debug,
         log_level="info",
     )

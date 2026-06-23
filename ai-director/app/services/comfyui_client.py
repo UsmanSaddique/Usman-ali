@@ -602,11 +602,21 @@ def build_sdxl_workflow(
     ckpt_name: str = "sd_xl_base_1.0.safetensors",
     output_prefix: str = "ai_director_img",
     loras: list[tuple[str, float]] = None,
+    hires: bool = False,
+    hires_scale: float = 1.5,
+    hires_denoise: float = 0.45,
+    hires_steps: int = 0,
 ) -> dict:
     """ComfyUI API workflow for SDXL still-image generation.
     Used instead of diffusers (which breaks with transformers 5.9).
     `loras`: optional [(filename, weight)] — e.g. a Pixar-style LoRA and/or a
-    trained character LoRA, chained onto the model+clip."""
+    trained character LoRA, chained onto the model+clip.
+
+    `hires=True` enables a two-pass "hires-fix": render the base latent, upscale
+    it `hires_scale`x, then run a SECOND low-denoise KSampler pass that adds real
+    facial/hand/texture detail (the single biggest still-quality lever on SDXL
+    base — turns soft, mushy faces into clean ones). `hires_denoise` ~0.4-0.5 keeps
+    composition while sharpening; higher invents more detail (and more drift)."""
     wf = {
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt_name}},
     }
@@ -628,10 +638,21 @@ def build_sdxl_workflow(
             "model": cur_model, "positive": ["2", 0], "negative": ["3", 0],
             "latent_image": ["4", 0], "seed": seed, "steps": steps, "cfg": cfg,
             "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0}},
-        "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
-        "7": {"class_type": "SaveImage", "inputs": {
-            "images": ["6", 0], "filename_prefix": output_prefix}},
     })
+    final_latent = ["5", 0]
+    if hires:
+        # Pass 2: upscale the latent and refine — adds genuine detail to faces/hands.
+        wf["8"] = {"class_type": "LatentUpscaleBy", "inputs": {
+            "samples": ["5", 0], "upscale_method": "nearest-exact", "scale_by": hires_scale}}
+        wf["9"] = {"class_type": "KSampler", "inputs": {
+            "model": cur_model, "positive": ["2", 0], "negative": ["3", 0],
+            "latent_image": ["8", 0], "seed": seed,
+            "steps": hires_steps or steps, "cfg": cfg,
+            "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": hires_denoise}}
+        final_latent = ["9", 0]
+    wf["6"] = {"class_type": "VAEDecode", "inputs": {"samples": final_latent, "vae": ["1", 2]}}
+    wf["7"] = {"class_type": "SaveImage", "inputs": {
+        "images": ["6", 0], "filename_prefix": output_prefix}}
     return wf
 
 
@@ -642,14 +663,18 @@ def build_esrgan_video_upscale_workflow(
     fps: float = 24.0,
     model_name: str = "4x-UltraSharp.pth",
     output_prefix: str = "ai_director_hd",
+    frame_load_cap: int = 0,     # 0 = all; set small (e.g. 16) to chunk and avoid OOM
+    skip_first_frames: int = 0,
 ) -> dict:
     """Real AI upscale of a video clip via ComfyUI: load frames -> 4x ESRGAN
     (adds genuine detail/sharpness) -> downscale to target (crisp) -> recombine.
-    Far better than lanczos+sharpen (which just smears soft input)."""
+    Far better than lanczos+sharpen (which just smears soft input).
+    Process in frame chunks (frame_load_cap) so the 4x batch doesn't OOM 16GB."""
     return {
         "1": {"class_type": "VHS_LoadVideo", "inputs": {
             "video": video_filename, "force_rate": 0, "custom_width": 0, "custom_height": 0,
-            "frame_load_cap": 0, "skip_first_frames": 0, "select_every_nth": 1}},
+            "frame_load_cap": frame_load_cap, "skip_first_frames": skip_first_frames,
+            "select_every_nth": 1}},
         "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model_name}},
         "3": {"class_type": "ImageUpscaleWithModel", "inputs": {
             "upscale_model": ["2", 0], "image": ["1", 0]}},
@@ -661,6 +686,65 @@ def build_esrgan_video_upscale_workflow(
             "filename_prefix": output_prefix, "format": "video/h264-mp4",
             "pingpong": False, "save_output": True}},
     }
+
+
+def build_wan22_ti2v_workflow(
+    model_filename: str = "wan2.2_ti2v_5B_fp16.safetensors",
+    prompt: str = "",
+    negative_prompt: str = "",
+    width: int = 832,
+    height: int = 480,
+    num_frames: int = 97,
+    steps: int = 24,
+    cfg: float = 5.0,
+    seed: int = 42,
+    fps: int = 24,
+    clip_name: str = "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    vae_name: str = "wan2.2_vae.safetensors",
+    loras: list[tuple[str, float]] = None,
+    output_prefix: str = "ai_director_wan",
+) -> dict:
+    """Correct ComfyUI API workflow for Wan 2.2 **ti2v 5B** text-to-video.
+    The 5B model (~9.4GB) + UMT5 encoder (~6.3GB) + wan2.2 VAE fit resident in 16GB
+    -> NO per-scene reload (unlike LTX-22B+Gemma-12B). Uses Wan22ImageToVideoLatent
+    (the proper temporal video latent; omit start_image for pure txt2vid)."""
+    wf = {}
+    n = [0]
+    def nid():
+        n[0] += 1; return str(n[0])
+    model_node = nid()
+    wf[model_node] = {"class_type": "UNETLoader", "inputs": {
+        "unet_name": model_filename, "weight_dtype": "default"}}
+    clip_node = nid()
+    wf[clip_node] = {"class_type": "CLIPLoader", "inputs": {
+        "clip_name": clip_name, "type": "wan"}}
+    vae_node = nid()
+    wf[vae_node] = {"class_type": "VAELoader", "inputs": {"vae_name": vae_name}}
+
+    cur_model = [model_node, 0]; cur_clip = [clip_node, 0]
+    for lora_file, weight in (loras or []):
+        ln = nid()
+        wf[ln] = {"class_type": "LoraLoader", "inputs": {
+            "model": cur_model, "clip": cur_clip, "lora_name": lora_file,
+            "strength_model": weight, "strength_clip": weight}}
+        cur_model = [ln, 0]; cur_clip = [ln, 1]
+
+    pos = nid(); wf[pos] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": cur_clip}}
+    neg = nid(); wf[neg] = {"class_type": "CLIPTextEncode", "inputs": {
+        "text": negative_prompt or "blurry, low quality, distorted", "clip": cur_clip}}
+    lat = nid(); wf[lat] = {"class_type": "Wan22ImageToVideoLatent", "inputs": {
+        "vae": [vae_node, 0], "width": width, "height": height,
+        "length": num_frames, "batch_size": 1}}
+    samp = nid(); wf[samp] = {"class_type": "KSampler", "inputs": {
+        "model": cur_model, "positive": [pos, 0], "negative": [neg, 0],
+        "latent_image": [lat, 0], "seed": seed, "steps": steps, "cfg": cfg,
+        "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1.0}}
+    dec = nid(); wf[dec] = {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": [vae_node, 0]}}
+    save = nid(); wf[save] = {"class_type": "VHS_VideoCombine", "inputs": {
+        "images": [dec, 0], "frame_rate": fps, "loop_count": 0,
+        "filename_prefix": output_prefix, "format": "video/h264-mp4",
+        "save_output": True, "pingpong": False}}
+    return wf
 
 
 def build_acestep_workflow(

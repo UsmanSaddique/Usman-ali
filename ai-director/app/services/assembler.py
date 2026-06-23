@@ -65,6 +65,9 @@ class AssemblerService:
         res_map = {
             "1080p": (1920, 1080),
             "2k": (2560, 1440),
+            "1440p": (2560, 1440),
+            "4k": (3840, 2160),
+            "2160p": (3840, 2160),
             "720p": (1280, 720),
         }
         target_w, target_h = res_map.get(resolution, (1920, 1080))
