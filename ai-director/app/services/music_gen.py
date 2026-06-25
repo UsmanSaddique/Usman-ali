@@ -324,7 +324,7 @@ class MusicGenService:
             language=lang,
         )
         prompt_id = client.submit(wf)
-        history = client.wait_for_completion(prompt_id, timeout=900, poll=3.0)
+        history = client.wait_for_completion(prompt_id, timeout=1800, poll=3.0)
         client.collect_output(history, output_path)
 
     # ── HeartMuLa via ComfyUI (secondary — good quality) ────────────
@@ -374,7 +374,7 @@ class MusicGenService:
             tempo=tags["tempo"],
         )
         prompt_id = client.submit(wf)
-        history = client.wait_for_completion(prompt_id, timeout=900, poll=3.0)
+        history = client.wait_for_completion(prompt_id, timeout=1800, poll=3.0)
         client.collect_output(history, output_path)
 
     # ── ACE-Step via ComfyUI (fallback) ───────────────────────────

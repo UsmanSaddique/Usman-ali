@@ -770,11 +770,11 @@ def build_heartmula_workflow(
     """
     wf = {
         "1": {"class_type": "FL_HeartMuLa_ModelLoader", "inputs": {
-            "model_version": "3b",
-            "precision": "fp16",
+            "model_version": "3B",
+            "precision": "auto",
             "use_4bit": False,
             "force_reload": False,
-            "memory_mode": "normal",
+            "memory_mode": "auto",
         }},
         "2": {"class_type": "FL_HeartMuLa_TagsBuilder", "inputs": {
             "genre": genre or "acoustic",
