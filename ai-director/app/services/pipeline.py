@@ -862,7 +862,7 @@ class PipelineOrchestrator:
     # ── Phase 5: Music Generation ─────────────────────────────────
 
     def generate_music(self, project_id: str) -> Optional[str]:
-        """Generate background music track using ACE-Step."""
+        """Generate background music track using HeartMuLa 3B (or ACE-Step fallback)."""
         session = get_session()
         try:
             project = session.query(Project).get(project_id)

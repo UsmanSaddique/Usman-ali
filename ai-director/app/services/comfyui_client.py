@@ -747,19 +747,140 @@ def build_wan22_ti2v_workflow(
     return wf
 
 
+def build_heartmula_workflow(
+    style_tags: str,
+    lyrics: str = "",
+    duration_sec: float = 60.0,
+    seed: int = 42,
+    temperature: float = 1.0,
+    top_k: int = 50,
+    cfg_scale: float = 1.5,
+    genre: str = "",
+    mood: str = "",
+    instruments: str = "",
+    vocal_type: str = "instrumental",
+    gender: str = "none",
+    tempo: str = "medium",
+    output_prefix: str = "ai_director_music",
+) -> dict:
+    """ComfyUI API workflow for HeartMuLa 3B music generation.
+
+    Tags must use HeartMuLa's training vocabulary (short comma-separated tokens).
+    The TagsBuilder node expects values from its dropdown lists — not free-form text.
+    """
+    wf = {
+        "1": {"class_type": "FL_HeartMuLa_ModelLoader", "inputs": {
+            "model_version": "3b",
+            "precision": "fp16",
+            "use_4bit": False,
+            "force_reload": False,
+            "memory_mode": "normal",
+        }},
+        "2": {"class_type": "FL_HeartMuLa_TagsBuilder", "inputs": {
+            "genre": genre or "acoustic",
+            "vocal_type": vocal_type,
+            "mood": mood or "peaceful",
+            "tempo": tempo,
+            "secondary_genre": "cinematic",
+            "instruments": instruments or "piano, strings, flute",
+            "additional_tags": style_tags,
+        }},
+        "3": {"class_type": "FL_HeartMuLa_Conditioning", "inputs": {
+            "model": ["1", 0],
+            "tags": ["2", 0],
+            "lyrics": lyrics,
+            "cfg_scale": cfg_scale,
+        }},
+        "4": {"class_type": "FL_HeartMuLa_Sampler", "inputs": {
+            "model": ["1", 0],
+            "conditioning": ["3", 0],
+            "max_duration_sec": int(duration_sec),
+            "temperature": temperature,
+            "top_k": top_k,
+            "seed": seed,
+        }},
+        "5": {"class_type": "FL_HeartMuLa_Decode", "inputs": {
+            "model": ["1", 0],
+            "audio_tokens": ["4", 0],
+        }},
+        "6": {"class_type": "SaveAudio", "inputs": {
+            "audio": ["5", 0],
+            "filename_prefix": output_prefix,
+        }},
+    }
+    return wf
+
+
+def build_acestep15xl_workflow(
+    style_tags: str,
+    lyrics: str = "",
+    seconds: float = 120.0,
+    seed: int = 42,
+    steps: int = 8,
+    cfg: float = 1.0,
+    bpm: int = 90,
+    language: str = "en",
+    keyscale: str = "C major",
+    unet_name: str = "acestep_v1.5_xl_turbo_bf16.safetensors",
+    clip_name: str = "qwen_1.7b_ace15.safetensors",
+    vae_name: str = "ace_1.5_vae.safetensors",
+    output_prefix: str = "ai_director_music",
+) -> dict:
+    """ComfyUI API workflow for ACE-Step 1.5 XL (4B DiT, turbo).
+    Commercial-grade quality. Uses native ComfyUI nodes (no custom extensions).
+    Turbo variant = 8 steps. Split-file loading for 16GB VRAM with auto offload.
+    """
+    wf = {
+        "1": {"class_type": "UNETLoader", "inputs": {
+            "unet_name": unet_name, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": clip_name, "type": "ace"}},
+        "3": {"class_type": "VAELoader", "inputs": {
+            "vae_name": vae_name}},
+        "4": {"class_type": "TextEncodeAceStepAudio1.5", "inputs": {
+            "clip": ["2", 0],
+            "tags": style_tags,
+            "lyrics": lyrics,
+            "seed": seed,
+            "bpm": bpm,
+            "duration": float(seconds),
+            "timesignature": "4",
+            "language": language,
+            "keyscale": keyscale,
+            "generate_audio_codes": True,
+            "cfg_scale": 2.0,
+            "temperature": 0.85,
+            "top_p": 0.9,
+            "top_k": 0,
+            "min_p": 0.0,
+        }},
+        "5": {"class_type": "EmptyAceStep1.5LatentAudio", "inputs": {
+            "seconds": float(seconds), "batch_size": 1}},
+        "6": {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "positive": ["4", 0], "negative": ["4", 0],
+            "latent_image": ["5", 0], "seed": seed, "steps": steps, "cfg": cfg,
+            "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+        "7": {"class_type": "VAEDecodeAudio", "inputs": {
+            "samples": ["6", 0], "vae": ["3", 0]}},
+        "8": {"class_type": "SaveAudio", "inputs": {
+            "audio": ["7", 0], "filename_prefix": output_prefix}},
+    }
+    return wf
+
+
 def build_acestep_workflow(
     style_tags: str,
     lyrics: str = "",
     seconds: float = 60.0,
     seed: int = 42,
-    steps: int = 60,        # higher = better fidelity (ACE-Step sweet spot ~60)
+    steps: int = 60,
     cfg: float = 5.0,
     ckpt_name: str = "ace_step_v1_3.5b.safetensors",
     output_prefix: str = "ai_director_music",
 ) -> dict:
-    """ComfyUI API workflow for ACE-Step music generation.
+    """ComfyUI API workflow for ACE-Step v1.0 (legacy fallback).
     `style_tags` = comma-separated style/genre/instrument/mood prompt.
-    `lyrics` = empty string for instrumental. Output is an MP3 in ComfyUI/output."""
+    `lyrics` = empty string for instrumental."""
     wf = {
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt_name}},
         "2": {"class_type": "TextEncodeAceStepAudio", "inputs": {

@@ -147,11 +147,13 @@ class UpscaleModelConfig(BaseModel):
 
 
 class MusicModelConfig(BaseModel):
-    """ACE-Step music generation."""
-    name: str = "ace-step-v1.5"
-    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\ace-step-v1.5")
+    """Music generation — HeartMuLa 3B (primary) via ComfyUI, ACE-Step (fallback).
+    HeartMuLa auto-downloads to ComfyUI/models/heartmula/ on first use.
+    Uses 4-bit quantization to fit on 16GB VRAM (~4.9GB)."""
+    name: str = "heartmula-3b"
+    path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\heartmula")
     default_duration: int = 60   # seconds
-    default_sample_rate: int = 44100
+    default_sample_rate: int = 48000  # HeartMuLa outputs 48kHz
 
 
 class TTSConfig(BaseModel):
