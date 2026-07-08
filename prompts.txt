@@ -1,1 +1,8 @@
 103.115.197.108
+
+
+mongodb+srv://uali13002_db_user:gS88jQye-6RG7iu@cluster0.mcqlsjv.mongodb.net/?appName=Cluster0
+u584830220_
+u584830220_burjcom
+NoMorePass@2026
+burjcom_super_secret_key_2024_very_secure

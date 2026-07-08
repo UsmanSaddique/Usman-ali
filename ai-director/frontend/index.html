@@ -577,40 +577,220 @@ tr { cursor: pointer; }
       </div>
     </div>
 
-    <!-- ═════ PAGE: New Project ═════ -->
+    <!-- ═════ PAGE: New Project (Creation Wizard) ═════ -->
     <div id="page-new-project" class="page hidden">
-      <div class="page-header"><h2>Create New Video</h2></div>
-      <div class="card">
+      <style>
+        .wiz-steps{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
+        .wiz-step{flex:1;min-width:120px;text-align:center;padding:10px 6px;border-radius:8px;
+          border:1px solid var(--border);color:var(--text-dim);font-size:.8rem;font-weight:600;
+          background:var(--bg-card);cursor:default;transition:all .2s}
+        .wiz-step .n{display:inline-block;width:20px;height:20px;line-height:20px;border-radius:50%;
+          background:var(--border);margin-right:6px;font-size:.72rem}
+        .wiz-step.active{border-color:var(--accent);color:var(--text);box-shadow:0 0 12px rgba(124,92,255,.25)}
+        .wiz-step.active .n{background:var(--accent);color:#fff}
+        .wiz-step.done{border-color:var(--success);color:var(--success)}
+        .wiz-step.done .n{background:var(--success);color:#fff}
+        .wiz-step.clickable{cursor:pointer}
+        .wiz-clip{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border);
+          border-radius:8px;margin-top:8px;background:var(--bg)}
+        .wiz-clip img{width:96px;height:54px;object-fit:cover;border-radius:6px;background:#000}
+        .wiz-clip video{width:160px;height:90px;border-radius:6px;background:#000}
+        .wiz-chip{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:700}
+        .wiz-spin{display:inline-block;animation:wizspin 1s linear infinite}
+        @keyframes wizspin{to{transform:rotate(360deg)}}
+      </style>
+      <div class="page-header">
+        <h2>Create Video — Studio Wizard</h2>
+        <span class="text-dim text-sm" id="wiz-project-label"></span>
+      </div>
+
+      <div class="wiz-steps" id="wiz-steps">
+        <div class="wiz-step" data-step="1"><span class="n">1</span>Brief</div>
+        <div class="wiz-step" data-step="2"><span class="n">2</span>Music / Audio</div>
+        <div class="wiz-step" data-step="3"><span class="n">3</span>Scenes</div>
+        <div class="wiz-step" data-step="4"><span class="n">4</span>Clips + Upscale</div>
+        <div class="wiz-step" data-step="5"><span class="n">5</span>Final Video</div>
+      </div>
+
+      <!-- ── STEP 1: Brief ── -->
+      <div class="card" id="wiz-s1">
+        <h3 class="flex-between"><span>1 · The Brief</span>
+          <button class="btn-outline btn-sm" onclick="wizCopyPrompt(1, this)" title="Copy a ready-made prompt for ChatGPT/Claude that generates everything this step needs">📋 Copy AI prompt</button></h3>
         <div class="form-grid">
           <div class="form-group full">
             <label>Video Title</label>
-            <input type="text" id="new-title" placeholder="The Enchanted Fairy Garden Adventure">
+            <input type="text" id="wiz-title" placeholder="Bismillah Song for Kids — Sing Along!">
           </div>
           <div class="form-group">
             <label>Channel</label>
-            <select id="new-channel"></select>
+            <select id="wiz-channel"></select>
           </div>
           <div class="form-group">
-            <label>Duration (minutes)</label>
-            <input type="number" id="new-duration" value="5" min="1" max="30" oninput="updateAvgSceneDuration()">
+            <label>Video Length</label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input type="number" id="wiz-duration" value="20" min="5" max="1800" style="width:90px" oninput="wizHint()">
+              <span class="text-dim text-sm">sec</span>
+              <button class="btn-outline btn-sm" onclick="wizSetDur(20)">20s</button>
+              <button class="btn-outline btn-sm" onclick="wizSetDur(60)">1m</button>
+              <button class="btn-outline btn-sm" onclick="wizSetDur(120)">2m</button>
+              <button class="btn-outline btn-sm" onclick="wizSetDur(180)">3m</button>
+            </div>
           </div>
           <div class="form-group">
-            <label>Number of Scenes (Script Length)</label>
-            <input type="number" id="new-num-scenes" value="12" min="1" max="100" oninput="updateAvgSceneDuration()">
-            <span id="avg-duration-hint" class="text-dim text-sm" style="margin-top: 4px; font-size: 0.75rem;">Avg clip duration: ~25.0s</span>
+            <label>Number of Clips</label>
+            <input type="number" id="wiz-clips" value="5" min="1" max="100" oninput="wizHint()">
+            <span id="wiz-hint" class="text-dim text-sm" style="font-size:.75rem">= 5 clips × 4.0s each</span>
           </div>
-
           <div class="form-group full">
-            <label>Context / Notes (optional)</label>
-            <textarea id="new-context" placeholder="Any specific themes, scenes, or details you want included..."></textarea>
+            <label>Song Lyrics (paste here — drives the music AND the scene timing; leave empty for a story video)</label>
+            <textarea id="wiz-lyrics" rows="8" placeholder="[chorus]&#10;Bismillah, Bismillah, say it with a smile...&#10;&#10;[verse]&#10;..."></textarea>
+          </div>
+          <div class="form-group full">
+            <label>Creative Notes (optional)</label>
+            <textarea id="wiz-context" rows="2" placeholder="Themes, characters, mood…"></textarea>
           </div>
         </div>
-        <div class="btn-group mt-16" style="flex-wrap: wrap; gap: 10px;">
-          <button class="btn-generate" onclick="createAndGenerate()">
-            <span class="btn-icon">▶</span> Create & Generate Script
-          </button>
-          <button class="btn-primary" onclick="createProject()">Create Project Only</button>
+        <div class="btn-group mt-16" style="flex-wrap:wrap;gap:10px">
+          <button class="btn-generate" onclick="wizCreate(false)"><span class="btn-icon">▶</span> Start — Step by Step (Full Control)</button>
+          <button class="btn-warning" onclick="wizCreate(true)">🚀 Full Auto (hands-off, QA-gated)</button>
           <button class="btn-outline" onclick="showPage('dashboard')">Cancel</button>
+          <button class="btn-outline btn-sm hidden" id="wiz-s1-next" onclick="wizGo(2)">Next: Music ›</button>
+        </div>
+      </div>
+
+      <!-- ── STEP 2: Music ── -->
+      <div class="card hidden" id="wiz-s2">
+        <h3 class="flex-between"><span>2 · Music / Audio</span>
+          <button class="btn-outline btn-sm" onclick="wizCopyPrompt(2, this)" title="Copy a ready-made prompt for ChatGPT/Claude that generates the music style for this step">📋 Copy AI prompt</button></h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Music Engine</label>
+            <select id="wiz-music-engine">
+              <option value="sft">ACE-Step 1.5 XL SFT — ★ best quality (50+ steps)</option>
+              <option value="turbo">ACE-Step 1.5 XL Turbo — ⚡ fast (8 steps)</option>
+              <option value="heartmula">HeartMuLa 3B — alt engine</option>
+              <option value="auto">Auto (best available)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Vocals</label>
+            <select id="wiz-music-vocals">
+              <option value="vocal">Sing the lyrics (vocal song)</option>
+              <option value="instrumental">Instrumental only</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Versions to audition (same lyrics, different styles)</label>
+            <input type="number" id="wiz-music-count" value="10" min="1" max="10">
+          </div>
+          <div class="form-group full">
+            <label>Music Style</label>
+            <input type="text" id="wiz-music-style" placeholder="children's song, cheerful female vocal, ukulele, glockenspiel, happy sing-along">
+          </div>
+          <div class="form-group full">
+            <label>Lyrics (synced with Step 1 — edit here and the vocals will sing exactly this)</label>
+            <textarea id="wiz-music-lyrics" rows="8" placeholder="[chorus]&#10;Bismillah, Bismillah, say it with a smile...&#10;&#10;[verse]&#10;..."></textarea>
+          </div>
+        </div>
+        <div class="btn-group mt-16">
+          <button class="btn-generate" id="wiz-music-btn" onclick="wizGenMusic()"><span class="btn-icon">♫</span> Generate Versions</button>
+          <button class="btn-danger btn-sm hidden" id="wiz-music-pause" onclick="wizPause(this)">⏸ Pause</button>
+          <button class="btn-success btn-sm hidden" id="wiz-music-resume" onclick="wizResumeMusic()">▶ Resume remaining</button>
+          <button class="btn-outline" onclick="wizGo(3)">Skip (no music / add later)</button>
+        </div>
+        <div id="wiz-music-status" class="text-dim text-sm mt-8"></div>
+        <div id="wiz-music-variants" class="mt-8"></div>
+        <div class="btn-group mt-8 hidden" id="wiz-music-next">
+          <button class="btn-success" onclick="wizGo(3)">✓ Use selected song — Next: Scenes</button>
+          <button class="btn-warning btn-sm" onclick="wizGenMusic()">↻ Generate another batch</button>
+        </div>
+        <div class="btn-group mt-16">
+          <button class="btn-outline btn-sm" onclick="wizGo(1)">‹ Back: Brief</button>
+          <button class="btn-outline btn-sm" onclick="wizGo(3)">Next: Scenes ›</button>
+        </div>
+      </div>
+
+      <!-- ── STEP 3: Scenes ── -->
+      <div class="card hidden" id="wiz-s3">
+        <h3 class="flex-between"><span>3 · Scenes</span>
+          <button class="btn-outline btn-sm" onclick="wizCopyPrompt(3, this)" title="Copy a ready-made prompt for ChatGPT/Claude that writes all scene prompts for this step">📋 Copy AI prompt</button></h3>
+        <p class="text-dim text-sm">How should the scene list be written?</p>
+        <div class="btn-group mt-8" style="flex-wrap:wrap">
+          <button class="btn-primary" id="wiz-scenes-lyrics-btn" onclick="wizScenesFromLyrics()">⚡ From Lyrics (instant, beat-synced)</button>
+          <button class="btn-outline" id="wiz-scenes-llm-btn" onclick="wizScenesLLM()">🧠 AI Director Script (LLM, ~2-4 min, richer story)</button>
+          <button class="btn-outline" onclick="wizTogglePasteScenes()">📋 Paste / Manual</button>
+          <button class="btn-danger btn-sm hidden" id="wiz-scenes-stop" onclick="wizStop()">⏹ Stop</button>
+        </div>
+
+        <div id="wiz-scenes-paste-area" class="mt-8 hidden" style="border: 1px dashed var(--border); padding: 16px; border-radius: 8px;">
+          <p class="text-dim text-sm" style="margin-bottom: 8px;">Paste your scene prompts here (one per line). A new scene will be created for each line.</p>
+          <textarea id="wiz-paste-prompts" rows="6" placeholder="A beautiful sunset over the mountains...&#10;A character walking through a dark forest..." style="width:100%; font-size: 0.8rem; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text);"></textarea>
+          <div class="btn-group mt-8">
+            <button class="btn-primary btn-sm" onclick="wizSubmitPaste()">Add Pasted Scenes</button>
+            <button class="btn-outline btn-sm" onclick="wizAddEmptyScene()">+ Add Empty Scene</button>
+          </div>
+        </div>
+
+        <div id="wiz-scenes-status" class="text-dim text-sm mt-8"></div>
+        <div id="wiz-scenes-list" class="mt-8"></div>
+        <div class="btn-group mt-16 hidden" id="wiz-scenes-next">
+          <button class="btn-success" onclick="wizGo(4)">✓ Scenes approved — Next: Clips</button>
+        </div>
+        <div class="btn-group mt-16">
+          <button class="btn-outline btn-sm" onclick="wizGo(2)">‹ Back: Music</button>
+          <button class="btn-outline btn-sm" onclick="wizGo(4)">Next: Clips ›</button>
+        </div>
+      </div>
+
+      <!-- ── STEP 4: Clips ── -->
+      <div class="card hidden" id="wiz-s4">
+        <h3 class="flex-between"><span>4 · Clips — generate one by one, upscaled as they finish</span>
+          <button class="btn-outline btn-sm" onclick="wizCopyPrompt(4, this)" title="Copy a prompt that helps an AI fix/rewrite a scene prompt for a clip that came out wrong">📋 Copy AI prompt</button></h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Video Model</label>
+            <select id="wiz-video-model"></select>
+          </div>
+          <div class="form-group">
+            <label class="flex items-center gap-2" style="cursor:pointer;margin-top:22px">
+              <input type="checkbox" id="wiz-upscale-inline" checked style="width:auto">
+              <span>Upscale each clip to 1080p right after it generates</span>
+            </label>
+          </div>
+        </div>
+        <div class="btn-group mt-8">
+          <button class="btn-generate" id="wiz-clips-all-btn" onclick="wizGenClips(null)"><span class="btn-icon">▶</span> Generate All (one by one)</button>
+          <button class="btn-danger btn-sm hidden" id="wiz-clips-pause" onclick="wizPause(this)">⏸ Pause</button>
+        </div>
+        <div id="wiz-clips-list" class="mt-8"></div>
+        <div class="btn-group mt-16 hidden" id="wiz-clips-next">
+          <button class="btn-success" onclick="wizGo(5)">✓ All clips ready — Next: Final Merge</button>
+        </div>
+        <div class="btn-group mt-16">
+          <button class="btn-outline btn-sm" onclick="wizGo(3)">‹ Back: Scenes</button>
+          <button class="btn-outline btn-sm" onclick="wizGo(5)">Next: Final Video ›</button>
+        </div>
+      </div>
+
+      <!-- ── STEP 5: Merge ── -->
+      <div class="card hidden" id="wiz-s5">
+        <h3 class="flex-between"><span>5 · Final Video</span>
+          <button class="btn-outline btn-sm" onclick="wizCopyPrompt(5, this)" title="Copy a prompt that generates YouTube title/description/tags for the finished video">📋 Copy AI prompt</button></h3>
+        <p class="text-dim text-sm">Merge all clips with the music into one video (crossfades, 1080p, QA-checked).</p>
+        <div class="btn-group mt-8">
+          <button class="btn-generate" id="wiz-merge-btn" onclick="wizMerge()"><span class="btn-icon">🎬</span> Merge &amp; Render Final Video</button>
+          <button class="btn-danger btn-sm hidden" id="wiz-merge-stop" onclick="wizStop()">⏹ Stop</button>
+        </div>
+        <div id="wiz-merge-status" class="text-dim text-sm mt-8"></div>
+        <div id="wiz-final" class="hidden mt-8">
+          <video id="wiz-final-video" controls style="width:100%;border-radius:8px;background:#000"></video>
+          <div class="btn-group mt-8">
+            <a id="wiz-final-download" class="btn-success" href="#" download>⬇ Download MP4</a>
+            <button class="btn-outline" onclick="showPage('dashboard')">Back to Dashboard</button>
+          </div>
+        </div>
+        <div class="btn-group mt-16">
+          <button class="btn-outline btn-sm" onclick="wizGo(4)">‹ Back: Clips</button>
         </div>
       </div>
     </div>
@@ -960,7 +1140,8 @@ function renderProjectSilent() {
   let btns = '';
   switch(p.status) {
     case 'draft':
-      btns = `<button class="btn-primary" onclick="pipelineAction('generate-script')">Generate Script</button>`;
+      btns = `<button class="btn-primary" onclick="pipelineAction('generate-script')">Generate Script</button>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>`;
       break;
     case 'scripted':
       btns = `<button class="btn-success" onclick="pipelineAction('approve-script')">Approve Script</button>
@@ -983,8 +1164,8 @@ function renderProjectSilent() {
               <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
     case 'failed':
-      btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume Generation</button>
-              <button class="btn-outline" onclick="pipelineAction('generate-script')">Regenerate Script</button>
+      btns = `<button class="btn-primary" onclick="pipelineAction('resume')">▶ Resume (auto, keeps finished work)</button>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     default:
@@ -1012,11 +1193,7 @@ function showPage(page) {
   if (page === 'dashboard') loadProjects();
   if (page === 'channels') loadChannels();
   if (page === 'loras') loadLoRAs();
-  if (page === 'new-project') {
-    loadChannelsDropdown();
-    loadModelsAndLoras();
-    updateAvgSceneDuration();
-  }
+  if (page === 'new-project') wizInit();
 }
 
 // ── API Helpers ────────────────────────────────────────────────
@@ -1055,9 +1232,26 @@ async function pollGPU() {
       if (cStatus.running) {
         indicator.textContent = 'Ready';
         indicator.style.color = 'var(--success)';
+        indicator.style.cursor = '';
+        indicator.title = '';
+        indicator.onclick = null;
+      } else if (cStatus.starting) {
+        indicator.textContent = 'Starting…';
+        indicator.style.color = 'var(--warning)';
+        indicator.style.cursor = '';
+        indicator.title = 'ComfyUI is booting (takes 1–3 min on cold start)';
+        indicator.onclick = null;
       } else {
-        indicator.textContent = 'Offline';
+        indicator.textContent = 'Offline — click to start';
         indicator.style.color = 'var(--danger)';
+        indicator.style.cursor = 'pointer';
+        indicator.title = 'Launch the ComfyUI engine';
+        indicator.onclick = async () => {
+          indicator.textContent = 'Starting…';
+          indicator.style.color = 'var(--warning)';
+          indicator.onclick = null;
+          try { await api('/api/system/engine-start', 'POST'); } catch(e) {}
+        };
       }
     }
   } catch(e) {}
@@ -1144,7 +1338,8 @@ function renderProject() {
   let btns = '';
   switch(p.status) {
     case 'draft':
-      btns = `<button class="btn-primary" onclick="pipelineAction('generate-script')">Generate Script</button>`;
+      btns = `<button class="btn-primary" onclick="pipelineAction('generate-script')">Generate Script</button>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>`;
       break;
     case 'scripted':
       btns = `<button class="btn-success" onclick="pipelineAction('approve-script')">Approve Script</button>
@@ -1155,11 +1350,13 @@ function renderProject() {
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     case 'generating': case 'upscaling': case 'assembling': case 'music': case 'scripting':
-      btns = `<button class="btn-danger" onclick="cancelPipeline()">Cancel</button>`;
+      btns = `<button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Resume Wizard</button>
+              <button class="btn-danger" onclick="cancelPipeline()">Cancel</button>`;
       break;
     case 'generated':
       btns = `<button class="btn-primary" onclick="pipelineAction('start-upscale')">Upscale</button>
               <button class="btn-success" onclick="pipelineAction('render')">Assemble & Render</button>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     case 'rendered':
@@ -1167,8 +1364,8 @@ function renderProject() {
               <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
     case 'failed':
-      btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume Generation</button>
-              <button class="btn-outline" onclick="pipelineAction('generate-script')">Regenerate Script</button>
+      btns = `<button class="btn-primary" onclick="pipelineAction('resume')">▶ Resume (auto, keeps finished work)</button>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     default:
@@ -1683,6 +1880,19 @@ function updateProgress(data) {
     }, 1000);
   }
 
+  // Feed progress to wizard clips view in real time
+  if (wiz.id && data.phase === 'generating') {
+    // Reset timer when the active scene changes
+    if (!wiz.progress || wiz.progress.current_scene !== data.current_scene) {
+      wiz.genStartTime = Date.now();
+    }
+    wiz.progress = data;
+    if (wiz.step === 4) wizRenderClips();
+  } else if (data.phase !== 'generating') {
+    wiz.progress = null;
+    wiz.genStartTime = null;
+  }
+
   if (data.phase === 'error') {
     alert('Backend Pipeline Error:\n' + data.message);
   }
@@ -1823,6 +2033,638 @@ function appendLog(msg) {
     if (projLog.childElementCount > 500) projLog.removeChild(projLog.firstChild);
     projLog.scrollTop = projLog.scrollHeight;
   }
+}
+
+// ═══ Creation Wizard ════════════════════════════════════════════
+// 5 steps: Brief → Music → Scenes → Clips (+inline upscale) → Merge.
+// Works for new projects AND resumes any existing one at the right step.
+let wiz = { id: null, step: 1, poll: null, progress: null, genStartTime: null };
+
+async function wizInit() {
+  // fresh entry from the nav — reset unless re-entering via openWizard
+  if (!wiz.keepState) { wiz.id = null; wiz.step = 1; }
+  wiz.keepState = false;
+  document.getElementById('wiz-project-label').textContent = wiz.id ? `project ${wiz.id.slice(0,8)}…` : '';
+  try {
+    const channels = await api('/api/channels');
+    document.getElementById('wiz-channel').innerHTML =
+      channels.map(c => `<option value="${c.slug}">${esc(c.name)}</option>`).join('');
+  } catch(e) {}
+  try {
+    const models = await api('/api/available-models');
+    document.getElementById('wiz-video-model').innerHTML = models
+      .filter(m => m.family === 'ltx' || m.family === 'wan')
+      .map(m => {
+        const tag = m.family === 'ltx' ? '★ quality' : '⚡ fast';
+        const sel = m.filename.includes('LTX-2.3-22B-distilled') ? 'selected' : '';
+        return `<option value="${m.filename}" ${sel}>${m.filename} (${tag}, ${m.size_gb}GB)</option>`;
+      }).join('');
+  } catch(e) {}
+  wizGo(wiz.step, true);
+}
+
+function wizSetDur(s) { document.getElementById('wiz-duration').value = s; wizHint(); }
+function wizHint() {
+  const d = parseFloat(document.getElementById('wiz-duration').value) || 20;
+  const n = parseInt(document.getElementById('wiz-clips').value) || 5;
+  document.getElementById('wiz-hint').textContent = `= ${n} clips × ${(d/n).toFixed(1)}s each`;
+}
+
+function wizGo(step, silent) {
+  wiz.step = step;
+  for (let i = 1; i <= 5; i++) {
+    document.getElementById('wiz-s' + i).classList.toggle('hidden', i !== step);
+    const chip = document.querySelector(`.wiz-step[data-step="${i}"]`);
+    chip.classList.toggle('active', i === step);
+    chip.classList.toggle('done', i < step && !!wiz.id);
+    chip.classList.toggle('clickable', !!wiz.id);
+    chip.onclick = wiz.id ? () => wizGo(i) : null;
+  }
+  const s1next = document.getElementById('wiz-s1-next');
+  if (s1next) s1next.classList.toggle('hidden', !wiz.id);
+  if (step === 4) wizRenderClips();
+  if (step >= 2 && wiz.id) wizStartPoll();
+}
+
+async function wizCreate(fullAuto) {
+  const title = document.getElementById('wiz-title').value.trim();
+  if (!title) { alert('Enter a title'); return; }
+  const body = {
+    title,
+    channel_slug: document.getElementById('wiz-channel').value,
+    duration: parseInt(document.getElementById('wiz-duration').value) || 20,
+    num_scenes: parseInt(document.getElementById('wiz-clips').value) || 5,
+    context: document.getElementById('wiz-context').value,
+    lyrics: document.getElementById('wiz-lyrics').value.trim() || null,
+  };
+  try {
+    const r = await api('/api/projects', 'POST', body);
+    wiz.id = r.id;
+    document.getElementById('wiz-project-label').textContent = `project ${r.id.slice(0,8)}…`;
+    const vbox = document.getElementById('wiz-music-variants');
+    vbox.innerHTML = ''; vbox.dataset.project = r.id;
+    document.getElementById('wiz-music-next').classList.add('hidden');
+    if (fullAuto) {
+      await api(`/api/projects/${r.id}/full-auto`, 'POST');
+      openProject(r.id);   // watch it live on the project page
+    } else {
+      // sensible default music style from the brief
+      const styleEl = document.getElementById('wiz-music-style');
+      if (!styleEl.value) styleEl.value = "children's song, cheerful female vocal, children choir, ukulele, glockenspiel, soft piano, happy sing-along, professional studio mix";
+      wizGo(2);
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+// ── Copy AI prompt (per step) ──
+// Builds a ready-to-paste prompt for an external AI (ChatGPT/Claude) that
+// produces exactly the inputs the current step needs, using this app's real
+// parsing rules (section tags, timing, music keyword vocab, prompt formula).
+function wizAiPrompt(step) {
+  const val = id => (document.getElementById(id) || {}).value || '';
+  const duration = parseInt(val('wiz-duration')) || 20;
+  const clips = parseInt(val('wiz-clips')) || 5;
+  const perClip = (duration / clips).toFixed(1);
+  const channel = (document.getElementById('wiz-channel') || {}).selectedOptions?.[0]?.textContent || 'my kids channel';
+  const title = val('wiz-title').trim() || '[VIDEO TITLE]';
+  const lyrics = (val('wiz-music-lyrics').trim() || val('wiz-lyrics').trim()) || '[PASTE YOUR LYRICS HERE]';
+  const approxLines = Math.max(4, Math.round(duration / 3.2));
+
+  if (step === 1) return `You are helping me create a kids' music video with my AI video app. My channel: "${channel}".
+
+MY VIDEO IDEA: [DESCRIBE YOUR TOPIC HERE — e.g. "a happy song teaching kids to say Bismillah before eating"]
+
+Give me ALL of the following, clearly numbered:
+
+1) VIDEO TITLE — catchy, YouTube-kids friendly, includes the main keyword.
+
+2) SONG LYRICS — must fit ~${duration} seconds of singing (about ${approxLines} sung lines total).
+   STRICT FORMAT RULES (my app parses these):
+   - Use ONLY these section tags on their own lines: [intro] [verse] [chorus] [hook] [bridge] [outro]
+   - One short thought per line (a verse line ≈ 3s, a chorus line ≈ 3.5s of song time)
+   - Simple words a 3–6 year old can sing along with; repeat the chorus at least twice
+   - A line fully in (parentheses) = instrumental break, e.g. (playful instrumental)
+   - NO timestamps, NO other markup, NO text before the first tag
+
+3) NUMBER OF CLIPS — I plan ${clips} visual clips (~${perClip}s each) for ${duration}s. Confirm or suggest better.
+
+4) CREATIVE NOTES — 2–3 sentences for the video: theme, main characters, mood, settings.`;
+
+  if (step === 2) return `I need a MUSIC STYLE string for my AI music generator (ACE-Step), for this children's song:
+
+LYRICS:
+"""
+${lyrics}
+"""
+
+STRICT FORMAT: the style must be SHORT comma-separated keywords (NOT sentences). My engine only understands keywords like these:
+- genre: children's song, nursery rhyme, lullaby, nasheed, islamic, folk, pop, acoustic
+- vocals: female vocal, male vocal, children choir, sing-along — or "instrumental" for no vocals
+- instruments: ukulele, glockenspiel, piano, acoustic guitar, strings, flute, soft drums, hand claps, music box, tambourine, marimba
+- mood: cheerful, happy, peaceful, gentle, playful, warm, celebratory, dreamy
+- tempo: slow / medium / fast / upbeat
+- language: include the word "urdu" or "arabic" ONLY if the vocals should be sung in that language
+
+Give me:
+1) ONE main style string (8–12 keywords max) that best fits these lyrics
+2) FIVE alternative style strings with clearly different treatments (e.g. lullaby version, choir version, folk version, energetic version, instrumental version)`;
+
+  if (step === 3) return `Write ${clips} visual SCENE PROMPTS for my AI video generator — one per clip (~${perClip}s each) — telling the visual story of this song, in order:
+
+TITLE: ${title}
+LYRICS:
+"""
+${lyrics}
+"""
+
+FORMAT — every scene prompt must be ONE line following exactly this formula:
+{shot type}, {character} {action} in {setting}, {camera/motion cue}, {art style}, {color palette}
+
+RULES:
+- shot type: wide shot / medium shot / close-up (start each prompt with it; prefer wide and medium shots; vary across clips)
+- character: repeat the SAME full character description word-for-word in every prompt for consistency, e.g. "a cute 5-year-old cartoon boy with brown eyes, short black hair, wearing a white thobe and a small white prayer cap"
+- action: what the character does in that moment of the song
+- setting: sunny garden, cozy home kitchen, mosque courtyard, playground, etc.
+- camera/motion cue: gentle camera pan, slow zoom in, character claps hands and sways, etc.
+- art style: 3D cartoon animation, soft lighting, high quality render
+- color palette: bright cheerful colors / warm pastel tones
+- English only, one line per scene, no real brand names, nothing scary
+
+ALSO give me ONE reusable NEGATIVE PROMPT (things to avoid: blurry, distorted face, extra fingers, deformed hands, text, watermark, scary imagery, realistic photo).
+
+Number the scenes 1–${clips}. I will paste each into my app's scene editor (fields: prompt, negative prompt, camera motion, duration).`;
+
+  if (step === 4) return `One of my AI-generated video clips came out wrong. Rewrite the scene prompt to fix it, keeping the same character and art style.
+
+CURRENT SCENE PROMPT:
+"""
+[PASTE THE SCENE PROMPT HERE — open the scene's Edit button to copy it]
+"""
+
+WHAT'S WRONG: [DESCRIBE THE PROBLEM — e.g. distorted face / wrong action / character looks different / too static]
+
+RULES:
+- Keep the one-line formula: {shot type}, {character} {action} in {setting}, {camera/motion cue}, {art style}, {color palette}
+- Keep the exact same character description word-for-word
+- English only, one line
+Give me 3 alternative rewrites, best first.`;
+
+  return `My kids' video is finished. Create YouTube metadata for it:
+
+TITLE: ${title}
+CHANNEL: ${channel}
+LYRICS / CONTENT:
+"""
+${lyrics}
+"""
+
+Give me:
+1) 3 YouTube title options (kid- and parent-friendly, keyword first)
+2) A description: 2 short paragraphs + a "Lyrics" section + a call to subscribe
+3) 15 comma-separated tags
+4) 5 hashtags
+Match the language of the lyrics (translate the description if the song is in Urdu, and add an English summary line).`;
+}
+
+async function wizCopyPrompt(step, btn) {
+  const text = wizAiPrompt(step);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch(e) {
+    // clipboard API blocked — fall back to a temp textarea
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try { document.execCommand('copy'); } catch(e2) {}
+    ta.remove();
+  }
+  if (btn) {
+    const old = btn.textContent;
+    btn.textContent = '✓ Copied — paste into ChatGPT/Claude';
+    setTimeout(() => { btn.textContent = old; }, 2000);
+  }
+}
+
+// ── Step 2: Music ──
+// keep the Step-1 and Step-2 lyric boxes in sync (single source of truth)
+(function(){
+  const a = document.getElementById('wiz-lyrics'), b = document.getElementById('wiz-music-lyrics');
+  if (a && b) {
+    a.addEventListener('input', () => { b.value = a.value; });
+    b.addEventListener('input', () => { a.value = b.value; });
+  }
+})();
+
+async function wizGenMusic() {
+  if (!wiz.id) return;
+  const vocals = document.getElementById('wiz-music-vocals').value === 'vocal';
+  const lyrics = document.getElementById('wiz-music-lyrics').value.trim();
+  const count = Math.max(1, Math.min(parseInt(document.getElementById('wiz-music-count').value) || 10, 10));
+  document.getElementById('wiz-music-btn').disabled = true;
+  document.getElementById('wiz-music-status').innerHTML =
+    `<span class="wiz-spin">♫</span> Generating ${count} song version${count > 1 ? 's' : ''} — same lyrics, different styles… they appear below as they finish`;
+  try {
+    await api(`/api/projects/${wiz.id}/generate-music-variants`, 'POST', {
+      count: count,
+      engine: document.getElementById('wiz-music-engine').value,
+      style: document.getElementById('wiz-music-style').value,
+      lyrics: vocals ? lyrics : '',
+      vocals: vocals,
+    });
+    wizStartPoll();
+  } catch(e) {
+    document.getElementById('wiz-music-status').textContent = 'Error: ' + e.message;
+    document.getElementById('wiz-music-btn').disabled = false;
+  }
+}
+
+// ── Pause / Resume / Stop ──
+// Pause = graceful: finishes the current item (scene / song version), keeps
+// everything, stays resumable. Stop = hard cancel (project marked failed).
+async function wizPause(btn) {
+  if (!wiz.id) return;
+  try {
+    await api(`/api/projects/${wiz.id}/pause`, 'POST');
+    if (btn) { btn.disabled = true; btn.textContent = '⏸ Pausing after current…'; }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function wizStop() {
+  if (!wiz.id) return;
+  if (!confirm('Stop this step now? It will be marked failed — you can re-run it afterwards.')) return;
+  try { await api(`/api/projects/${wiz.id}/cancel`, 'POST'); }
+  catch(e) { alert('Error: ' + e.message); }
+}
+
+async function wizResumeMusic() {
+  if (!wiz.id) return;
+  const vocals = document.getElementById('wiz-music-vocals').value === 'vocal';
+  const lyrics = document.getElementById('wiz-music-lyrics').value.trim();
+  try {
+    const r = await api(`/api/projects/${wiz.id}/generate-music-variants`, 'POST', {
+      resume: true,
+      engine: document.getElementById('wiz-music-engine').value,
+      style: document.getElementById('wiz-music-style').value,
+      lyrics: vocals ? lyrics : '',
+      vocals: vocals,
+    });
+    document.getElementById('wiz-music-status').innerHTML =
+      `<span class="wiz-spin">♫</span> Resuming — ${r.count} more version${r.count > 1 ? 's' : ''}…`;
+    document.getElementById('wiz-music-resume').classList.add('hidden');
+    wizStartPoll();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function wizSelectMusic(trackId) {
+  if (!wiz.id) return;
+  try {
+    await api(`/api/projects/${wiz.id}/select-music/${trackId}`, 'POST');
+    await wizRefresh();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+// Incremental render — never rebuilds existing rows, so a version keeps
+// playing while new ones stream in during the audition round.
+function wizRenderMusicVariants(p) {
+  const box = document.getElementById('wiz-music-variants');
+  // switching projects — drop the previous project's rows
+  if (box.dataset.project !== p.id) { box.innerHTML = ''; box.dataset.project = p.id; }
+  const vs = p.music_variants || [];
+  for (const v of vs) {
+    let row = box.querySelector(`[data-track="${v.id}"]`);
+    if (!row) {
+      row = document.createElement('div');
+      row.dataset.track = v.id;
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;margin-bottom:6px;flex-wrap:wrap';
+      const name = document.createElement('div');
+      name.style.cssText = 'flex:0 0 82px;font-weight:600';
+      name.textContent = `Version ${box.children.length + 1}`;
+      const audio = document.createElement('audio');
+      audio.controls = true; audio.preload = 'none';
+      audio.style.cssText = 'flex:1;min-width:220px;height:34px';
+      audio.src = v.url;
+      const styleTag = document.createElement('div');
+      styleTag.className = 'text-dim text-sm';
+      styleTag.style.cssText = 'flex:0 0 200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      styleTag.textContent = v.style || '';
+      styleTag.title = v.style || '';
+      const btn = document.createElement('button');
+      btn.className = 'btn-outline btn-sm v-pick';
+      btn.onclick = () => wizSelectMusic(v.id);
+      row.append(name, audio, styleTag, btn);
+      box.appendChild(row);
+    }
+    const btn = row.querySelector('.v-pick');
+    if (v.active) {
+      btn.textContent = '✓ Selected';
+      btn.className = 'btn-success btn-sm v-pick';
+      row.style.borderColor = 'var(--success)';
+    } else {
+      btn.textContent = 'Use this one';
+      btn.className = 'btn-outline btn-sm v-pick';
+      row.style.borderColor = 'rgba(255,255,255,0.12)';
+    }
+  }
+  document.getElementById('wiz-music-next').classList.toggle('hidden', !vs.some(v => v.active));
+  return vs.length;
+}
+
+// ── Step 3: Scenes ──
+async function wizScenesFromLyrics() {
+  if (!wiz.id) return;
+  document.getElementById('wiz-scenes-status').innerHTML = '<span class="wiz-spin">⚙</span> Building beat-synced scenes from your lyrics…';
+  try {
+    await api(`/api/projects/${wiz.id}/scenes-from-lyrics`, 'POST',
+      { num_clips: parseInt(document.getElementById('wiz-clips').value) || null });
+    await wizRefresh();
+  } catch(e) { document.getElementById('wiz-scenes-status').textContent = 'Error: ' + e.message; }
+}
+
+async function wizScenesLLM() {
+  if (!wiz.id) return;
+  document.getElementById('wiz-scenes-status').innerHTML = '<span class="wiz-spin">🧠</span> The AI Director is writing your script (2–4 min, the LLM is loading)…';
+  try {
+    await api(`/api/projects/${wiz.id}/generate-script`, 'POST');
+    wizStartPoll();
+  } catch(e) { document.getElementById('wiz-scenes-status').textContent = 'Error: ' + e.message; }
+}
+
+function wizTogglePasteScenes() {
+  const area = document.getElementById('wiz-scenes-paste-area');
+  area.classList.toggle('hidden');
+}
+
+async function wizSubmitPaste() {
+  if (!wiz.id) return;
+  const text = document.getElementById('wiz-paste-prompts').value;
+  const prompts = text.split('\n').map(l => l.trim()).filter(l => l);
+  if (!prompts.length) {
+    alert("Please enter at least one prompt.");
+    return;
+  }
+  document.getElementById('wiz-scenes-status').innerHTML = '<span class="wiz-spin">⚙</span> Adding scenes...';
+  try {
+    await api(`/api/projects/${wiz.id}/scenes-manual`, 'POST', { prompts });
+    document.getElementById('wiz-paste-prompts').value = '';
+    document.getElementById('wiz-scenes-paste-area').classList.add('hidden');
+    await wizRefresh();
+  } catch(e) { 
+    document.getElementById('wiz-scenes-status').textContent = 'Error: ' + e.message; 
+  }
+}
+
+async function wizAddEmptyScene() {
+  if (!wiz.id) return;
+  document.getElementById('wiz-scenes-status').innerHTML = '<span class="wiz-spin">⚙</span> Adding empty scene...';
+  try {
+    await api(`/api/projects/${wiz.id}/scenes-manual`, 'POST', { prompts: ["New Scene Prompt..."] });
+    await wizRefresh();
+  } catch(e) { 
+    document.getElementById('wiz-scenes-status').textContent = 'Error: ' + e.message; 
+  }
+}
+
+function wizRenderScenes(p) {
+  const list = document.getElementById('wiz-scenes-list');
+  const scenes = p.scenes || [];
+  if (!scenes.length) { list.innerHTML = ''; return; }
+  document.getElementById('wiz-scenes-status').textContent = `${scenes.length} scenes ready — review & edit, then continue.`;
+  document.getElementById('wiz-scenes-next').classList.remove('hidden');
+  list.innerHTML = scenes.map(s => `
+    <div class="wiz-clip" style="align-items:flex-start">
+      ${s.thumb_url ? `<img src="${s.thumb_url}" style="width:64px;height:64px;object-fit:cover;border-radius:4px;margin-right:12px">` : ''}
+      <div style="min-width:34px;font-weight:700;color:var(--accent)">#${s.scene_number}</div>
+      <div style="flex:1">
+        <textarea data-scene="${s.id}" class="wiz-prompt" rows="2"
+          style="width:100%;font-size:.78rem"
+          onchange="wizSaveScene('${s.id}', this.value)">${esc(s.prompt)}</textarea>
+        <span class="text-dim" style="font-size:.72rem">${s.scene_type} · ${s.duration}s · ${s.camera_motion || 'static'}</span>
+      </div>
+    </div>`).join('');
+}
+
+async function wizSaveScene(id, prompt) {
+  try { await api(`/api/scenes/${id}`, 'PUT', { prompt }); } catch(e) { alert('Save failed: ' + e.message); }
+}
+
+// ── Step 4: Clips ──
+async function wizGenClips(sceneId) {
+  if (!wiz.id) return;
+  const p = wiz.project;
+  if (!p || !(p.scenes || []).length) { alert('No scenes yet — go back to step 3.'); return; }
+  const ids = sceneId ? [sceneId]
+    : p.scenes.filter(s => !['generated','approved'].includes(s.status)).map(s => s.id);
+  if (!ids.length) { alert('All clips are already generated.'); return; }
+  try {
+    await api(`/api/projects/${wiz.id}/generate-scenes`, 'POST', {
+      scene_ids: ids,
+      video_model: document.getElementById('wiz-video-model').value,
+      width: 832, height: 480,
+      batch: true,
+      upscale_inline: document.getElementById('wiz-upscale-inline').checked,
+    });
+    document.getElementById('wiz-clips-all-btn').disabled = true;
+    wizStartPoll();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function _fmtTime(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function wizRenderClips() {
+  const p = wiz.project;
+  const list = document.getElementById('wiz-clips-list');
+  if (!p || !(p.scenes || []).length) { list.innerHTML = '<p class="text-dim text-sm">No scenes yet — complete step 3 first.</p>'; return; }
+  const running = ['generating','upscaling'].includes(p.status);
+  const allBtn = document.getElementById('wiz-clips-all-btn');
+  allBtn.disabled = running;
+  const clipsPause = document.getElementById('wiz-clips-pause');
+  clipsPause.classList.toggle('hidden', !running);
+  if (!running) { clipsPause.disabled = false; clipsPause.textContent = '⏸ Pause'; }
+  const todo = p.scenes.filter(s => !['generated','approved'].includes(s.status)).length;
+  const done = p.scenes.length - todo;
+  allBtn.innerHTML = (!running && todo > 0 && done > 0)
+    ? `<span class="btn-icon">▶</span> Resume remaining (${todo} clip${todo > 1 ? 's' : ''})`
+    : '<span class="btn-icon">▶</span> Generate All (one by one)';
+
+  // ── Overall progress summary bar ──
+  const prog = wiz.progress;
+  const pctVal = prog ? Math.round(prog.percent || 0) : Math.round((done / p.scenes.length) * 100);
+  const etaText = (prog && prog.eta_seconds > 0) ? `ETA: ${Math.round(prog.eta_seconds / 60)}m ${Math.round(prog.eta_seconds % 60)}s` : '';
+  const progressMsg = running
+    ? (prog ? prog.message : `Generating… ${done}/${p.scenes.length} done`)
+    : (done === p.scenes.length ? '✓ All clips complete' : `${done}/${p.scenes.length} clips done`);
+
+  let summaryHtml = `<div style="margin-bottom:12px;padding:12px;border-radius:8px;background:var(--bg);border:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span style="font-weight:600;font-size:.82rem">${progressMsg}</span>
+      <span class="text-dim" style="font-size:.78rem">${pctVal}% ${etaText ? '· ' + etaText : ''}</span>
+    </div>
+    <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+      <div style="height:100%;width:${pctVal}%;background:var(--accent);border-radius:3px;transition:width .4s"></div>
+    </div>
+  </div>`;
+
+  // ── Per-scene clip cards ──
+  const chips = { pending:'#555', queued:'#555', generating:'var(--warning, #e2b93b)', generated:'var(--success, #3ecf8e)', approved:'var(--success, #3ecf8e)', failed:'var(--danger, #ff5470)' };
+  const currentScene = prog ? prog.current_scene : null;
+
+  const cardsHtml = p.scenes.map(s => {
+    const clipUrl = s.clip_url ? s.clip_url + '?t=' + (s.retry_count||0) : null;
+    const media = clipUrl
+      ? `<video src="${clipUrl}" muted loop onmouseover="this.play()" onmouseout="this.pause()"></video>`
+      : (s.thumb_url ? `<img src="${s.thumb_url}">` : `<img>`);
+    const isActive = running && (s.status === 'generating' || s.scene_number === currentScene);
+    const spin = isActive ? ' <span class="wiz-spin">⚙</span>' : '';
+    const borderStyle = isActive
+      ? 'border-color:var(--warning);box-shadow:0 0 12px rgba(226,185,59,.3)'
+      : (['generated','approved'].includes(s.status) ? 'border-color:var(--success)' : '');
+
+    // Elapsed time for active scene
+    let timeInfo = '';
+    if (isActive && wiz.genStartTime) {
+      const elapsed = Date.now() - wiz.genStartTime;
+      timeInfo = `<span class="text-dim" style="font-size:.72rem;margin-left:6px">⏱ ${_fmtTime(elapsed)}</span>`;
+    }
+    // Generation time for finished scenes
+    const genVersions = s.versions || 0;
+    const genTime = (s.generation_time && s.generation_time > 0) ? `<span class="text-dim" style="font-size:.72rem;margin-left:6px">took ${Math.round(s.generation_time)}s</span>` : '';
+
+    return `<div class="wiz-clip" style="${borderStyle};transition:border-color .3s,box-shadow .3s">
+      ${media}
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:.8rem">
+          ${isActive ? '🔥 ' : ''}Clip ${s.scene_number} <span class="text-dim">· ${s.duration}s</span>
+          ${timeInfo}${genTime}
+        </div>
+        <span class="wiz-chip" style="background:${chips[s.status]||'#555'};color:#fff">${isActive ? 'generating' : s.status}${spin}</span>
+        ${s.upscaled ? '<span class="wiz-chip" style="background:var(--accent);color:#fff">1080p ✓</span>' : ''}
+      </div>
+      <button class="btn-outline btn-sm" ${running ? 'disabled' : ''}
+        onclick="wizGenClips('${s.id}')">${['generated','approved'].includes(s.status) ? '↻ Redo' : '▶ Generate'}</button>
+    </div>`;
+  }).join('');
+
+  list.innerHTML = summaryHtml + cardsHtml;
+  const allDone = p.scenes.length && p.scenes.every(s => ['generated','approved'].includes(s.status));
+  document.getElementById('wiz-clips-next').classList.toggle('hidden', !allDone);
+}
+
+// ── Step 5: Merge ──
+async function wizMerge() {
+  if (!wiz.id) return;
+  document.getElementById('wiz-merge-btn').disabled = true;
+  document.getElementById('wiz-merge-status').innerHTML = '<span class="wiz-spin">🎬</span> Merging clips + music into the final video…';
+  try {
+    await api(`/api/projects/${wiz.id}/render`, 'POST');
+    wizStartPoll();
+  } catch(e) {
+    document.getElementById('wiz-merge-status').textContent = 'Error: ' + e.message;
+    document.getElementById('wiz-merge-btn').disabled = false;
+  }
+}
+
+// ── Poll + state sync ──
+function wizStartPoll() {
+  if (wiz.poll) return;
+  wiz.poll = setInterval(wizRefresh, 4000);
+}
+function wizStopPoll() { if (wiz.poll) { clearInterval(wiz.poll); wiz.poll = null; } }
+
+async function wizRefresh() {
+  if (!wiz.id) { wizStopPoll(); return; }
+  // stop polling when the wizard page is hidden
+  if (document.getElementById('page-new-project').classList.contains('hidden')) { wizStopPoll(); return; }
+  let p;
+  try { p = await api(`/api/projects/${wiz.id}`); } catch(e) { return; }
+  wiz.project = p;
+
+  // Step 2: song versions stream in (audition round)
+  const m = p.music || {};
+  const nVariants = wizRenderMusicVariants(p);
+  const musicStatus = document.getElementById('wiz-music-status');
+  const musicPause = document.getElementById('wiz-music-pause');
+  const musicResume = document.getElementById('wiz-music-resume');
+  if (m.generating) {
+    const b = m.batch;
+    musicStatus.innerHTML = b
+      ? `<span class="wiz-spin">♫</span> Generating song versions… ${b.done}/${b.total} ready — listen to the finished ones while you wait`
+      : '<span class="wiz-spin">♫</span> Generating music…';
+    document.getElementById('wiz-music-btn').disabled = true;
+    musicPause.classList.remove('hidden');
+    musicResume.classList.add('hidden');
+  } else {
+    document.getElementById('wiz-music-btn').disabled = false;
+    musicPause.classList.add('hidden');
+    musicPause.disabled = false; musicPause.textContent = '⏸ Pause';
+    // paused / incomplete batch → offer to finish the remaining versions
+    const b = m.batch;
+    const remaining = b ? b.total - b.done : 0;
+    musicResume.classList.toggle('hidden', !(remaining > 0));
+    if (remaining > 0) musicResume.textContent = `▶ Resume remaining (${remaining})`;
+    if (nVariants) {
+      musicStatus.textContent = m.url
+        ? 'Song selected ✓ — continue to Scenes, or pick a different version.'
+        : (remaining > 0
+            ? `Paused — ${nVariants} version${nVariants > 1 ? 's' : ''} saved, ${remaining} still to generate.`
+            : `${nVariants} version${nVariants > 1 ? 's' : ''} ready — listen and pick your favourite.`);
+    }
+  }
+
+  // Step 3: scenes arrive
+  if ((p.scenes || []).length) wizRenderScenes(p);
+  else if (p.status === 'failed' && wiz.step === 3)
+    document.getElementById('wiz-scenes-status').textContent = 'Script failed: ' + (p.error_log || 'see logs');
+  // Stop buttons (steps 3 & 5) only make sense while something is running
+  const busy = ['scripting','generating','upscaling','assembling','music'].includes(p.status);
+  document.getElementById('wiz-scenes-stop').classList.toggle('hidden', !(busy && wiz.step === 3));
+  document.getElementById('wiz-merge-stop').classList.toggle('hidden', !(p.status === 'assembling'));
+
+  // Step 4: clip statuses
+  if (wiz.step === 4) wizRenderClips();
+
+  // Step 5: final render
+  if (p.status === 'rendered' && p.output_path) {
+    document.getElementById('wiz-merge-status').textContent = 'Final video rendered ✓ (QA-checked)';
+    document.getElementById('wiz-merge-btn').disabled = false;
+    const v = document.getElementById('wiz-final-video');
+    const url = `/projects/${p.id}/final_render.mp4?t=${Date.now()}`;
+    if (!v.getAttribute('src')) v.src = url;
+    document.getElementById('wiz-final-download').href = `/projects/${p.id}/final_render.mp4`;
+    document.getElementById('wiz-final').classList.remove('hidden');
+    if (wiz.step === 5) wizStopPoll();
+  }
+}
+
+// Open any existing project in the wizard at the right step (resume UX)
+async function openWizard(id) {
+  try {
+    const p = await api(`/api/projects/${id}`);
+    wiz.id = id; wiz.project = p; wiz.keepState = true;
+    // prefill the brief
+    document.getElementById('wiz-title').value = p.title || '';
+    document.getElementById('wiz-duration').value = p.duration_target || 20;
+    document.getElementById('wiz-clips').value = p.num_scenes_target || (p.scenes || []).length || 5;
+    document.getElementById('wiz-context').value = p.context || '';
+    document.getElementById('wiz-lyrics').value = p.lyrics || '';
+    document.getElementById('wiz-music-lyrics').value = p.lyrics || '';
+    wizHint();
+    // infer the resume step
+    const scenes = p.scenes || [];
+    const anyClips = scenes.some(s => ['generated','approved'].includes(s.status));
+    const allClips = scenes.length && scenes.every(s => ['generated','approved'].includes(s.status));
+    if (p.status === 'rendered') wiz.step = 5;
+    else if (allClips) wiz.step = 5;
+    else if (anyClips || scenes.length) wiz.step = 4;
+    else if ((p.music || {}).url) wiz.step = 3;
+    else wiz.step = 2;
+    showPage('new-project');
+    wizRefresh();
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 // ── Init ───────────────────────────────────────────────────────

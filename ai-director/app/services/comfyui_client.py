@@ -6,6 +6,8 @@ import time
 import uuid
 import shutil
 import logging
+import threading
+import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -14,10 +16,52 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 COMFYUI_BASE = "http://127.0.0.1:8188"
-COMFYUI_OUTPUT = Path(
+COMFYUI_ROOT = Path(
     r"C:\ComfyUI_windows_portable_nvidia_cu126"
-    r"\ComfyUI_windows_portable\ComfyUI\output"
+    r"\ComfyUI_windows_portable"
 )
+COMFYUI_OUTPUT = COMFYUI_ROOT / "ComfyUI" / "output"
+
+# Auto-launch state (module-level so every ComfyUIClient instance shares it)
+_launch_lock = threading.Lock()
+_launch_started_at: float = 0.0
+COLD_START_TIMEOUT = 240.0  # portable build takes a while to load its CUDA context
+
+
+def _spawn_comfyui() -> bool:
+    """Start the ComfyUI portable server as a detached background process.
+    Returns True if a process was spawned (not necessarily ready yet)."""
+    python = COMFYUI_ROOT / "python_embeded" / "python.exe"
+    main_py = COMFYUI_ROOT / "ComfyUI" / "main.py"
+    if not python.exists() or not main_py.exists():
+        logger.warning(f"[ComfyUI] Cannot auto-launch — portable install not found at {COMFYUI_ROOT}")
+        return False
+    log_path = COMFYUI_ROOT / "comfyui_autolaunch.log"
+    try:
+        log_file = open(log_path, "a", encoding="utf-8", errors="replace")
+        # same args as run_nvidia_gpu.bat; new process group so it survives
+        # AI Director restarts (uvicorn reload) and Ctrl+C in our console
+        subprocess.Popen(
+            [str(python), "-s", str(main_py), "--windows-standalone-build", "--enable-manager"],
+            cwd=str(COMFYUI_ROOT),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        )
+        logger.info(f"[ComfyUI] Auto-launched (logs: {log_path})")
+        return True
+    except Exception as e:
+        logger.error(f"[ComfyUI] Auto-launch failed: {e}")
+        return False
+
+
+def is_starting() -> bool:
+    """True while an auto-launched ComfyUI is still booting (spawned recently,
+    not yet answering)."""
+    if _launch_started_at <= 0:
+        return False
+    return (time.time() - _launch_started_at) < COLD_START_TIMEOUT
 
 
 class ComfyUIClient:
@@ -32,9 +76,32 @@ class ComfyUIClient:
         except Exception:
             return False
 
-    def wait_ready(self, timeout: float = 60.0, poll: float = 2.0) -> bool:
+    def ensure_running(self) -> bool:
+        """Ping ComfyUI; if offline, auto-launch the portable server (once —
+        concurrent callers share the same launch). Returns True if a launch
+        was started or it is already running/booting."""
+        global _launch_started_at
+        if self.ping():
+            return True
+        with _launch_lock:
+            if self.ping() or is_starting():
+                return True  # someone else already launched it
+            if _spawn_comfyui():
+                _launch_started_at = time.time()
+                return True
+        return False
+
+    def wait_ready(self, timeout: float = 60.0, poll: float = 2.0,
+                   autolaunch: bool = True) -> bool:
         """Block until ComfyUI answers, up to `timeout`. Handles the case where
-        ComfyUI is still reloading its CUDA context after the LLM released VRAM."""
+        ComfyUI is still reloading its CUDA context after the LLM released VRAM.
+        If it isn't running at all, auto-launch it and wait through the cold
+        start (unless autolaunch=False)."""
+        if self.ping():
+            return True
+        if autolaunch and self.ensure_running():
+            # cold start needs far longer than the usual reconnect wait
+            timeout = max(timeout, COLD_START_TIMEOUT)
         t0 = time.time()
         while time.time() - t0 < timeout:
             if self.ping():
@@ -50,8 +117,13 @@ class ComfyUIClient:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()
+            raise RuntimeError(f"ComfyUI HTTPError {e.code}: {body}")
+
         prompt_id = result.get("prompt_id")
         if not prompt_id:
             error = result.get("error") or result.get("node_errors") or result
@@ -162,6 +234,47 @@ def detect_family(model_filename: str) -> str:
     if "wan" in fn:
         return "wan"
     return "unknown"
+
+
+def build_zimage_workflow(
+    prompt: str,
+    width: int = 1024,
+    height: int = 1024,
+    steps: int = 8,
+    cfg: float = 1.0,
+    seed: int = 42,
+    shift: float = 3.0,
+    output_prefix: str = "zimage",
+) -> dict:
+    """Z-Image-Turbo text-to-image (6B, Apache-2.0). Exact recipe from ComfyUI's
+    bundled image_z_image_turbo template: UNETLoader + qwen_3_4b (lumina2 CLIP) +
+    ae VAE, ModelSamplingAuraFlow shift, res_multistep/simple, 8 steps cfg 1.
+    Negative is a zeroed-out conditioning (turbo needs no real negative)."""
+    wf = {}
+    n = [0]
+    def nid():
+        n[0] += 1
+        return str(n[0])
+
+    unet = nid(); wf[unet] = {"class_type": "UNETLoader", "inputs": {
+        "unet_name": "z_image_turbo_bf16.safetensors", "weight_dtype": "default"}}
+    ms = nid(); wf[ms] = {"class_type": "ModelSamplingAuraFlow", "inputs": {
+        "model": [unet, 0], "shift": shift}}
+    clip = nid(); wf[clip] = {"class_type": "CLIPLoader", "inputs": {
+        "clip_name": "qwen_3_4b.safetensors", "type": "lumina2", "device": "default"}}
+    vae = nid(); wf[vae] = {"class_type": "VAELoader", "inputs": {"vae_name": "z_image_ae.safetensors"}}
+    pos = nid(); wf[pos] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": [clip, 0]}}
+    zero = nid(); wf[zero] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": [pos, 0]}}
+    lat = nid(); wf[lat] = {"class_type": "EmptySD3LatentImage", "inputs": {
+        "width": width, "height": height, "batch_size": 1}}
+    samp = nid(); wf[samp] = {"class_type": "KSampler", "inputs": {
+        "model": [ms, 0], "positive": [pos, 0], "negative": [zero, 0],
+        "latent_image": [lat, 0], "seed": seed, "steps": steps, "cfg": cfg,
+        "sampler_name": "res_multistep", "scheduler": "simple", "denoise": 1.0}}
+    dec = nid(); wf[dec] = {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": [vae, 0]}}
+    save = nid(); wf[save] = {"class_type": "SaveImage", "inputs": {
+        "images": [dec, 0], "filename_prefix": output_prefix}}
+    return wf
 
 
 def build_ltx_workflow(
@@ -822,19 +935,79 @@ def build_acestep15xl_workflow(
     language: str = "en",
     keyscale: str = "C major",
     unet_name: str = "acestep_v1.5_xl_turbo_bf16.safetensors",
-    clip_name: str = "qwen_1.7b_ace15.safetensors",
+    clip_name_06b: str = "qwen_0.6b_ace15.safetensors",
+    clip_name_17b: str = "qwen_1.7b_ace15.safetensors",
     vae_name: str = "ace_1.5_vae.safetensors",
     output_prefix: str = "ai_director_music",
 ) -> dict:
     """ComfyUI API workflow for ACE-Step 1.5 XL (4B DiT, turbo).
     Commercial-grade quality. Uses native ComfyUI nodes (no custom extensions).
-    Turbo variant = 8 steps. Split-file loading for 16GB VRAM with auto offload.
+    Turbo variant = 8 steps. DualCLIPLoader required for ACE 1.5 architecture.
     """
     wf = {
         "1": {"class_type": "UNETLoader", "inputs": {
             "unet_name": unet_name, "weight_dtype": "default"}},
-        "2": {"class_type": "CLIPLoader", "inputs": {
-            "clip_name": clip_name, "type": "ace"}},
+        "2": {"class_type": "DualCLIPLoader", "inputs": {
+            "clip_name1": clip_name_06b, "clip_name2": clip_name_17b, "type": "ace"}},
+        "3": {"class_type": "VAELoader", "inputs": {
+            "vae_name": vae_name}},
+        "4": {"class_type": "TextEncodeAceStepAudio1.5", "inputs": {
+            "clip": ["2", 0],
+            "tags": style_tags,
+            "lyrics": lyrics,
+            "seed": seed,
+            "bpm": bpm,
+            "duration": float(seconds),
+            "timesignature": "4",
+            "language": language,
+            "keyscale": keyscale,
+            "generate_audio_codes": True,
+            "cfg_scale": 2.0,
+            "temperature": 0.85,
+            "top_p": 0.9,
+            "top_k": 0,
+            "min_p": 0.0,
+        }},
+        "5": {"class_type": "EmptyAceStep1.5LatentAudio", "inputs": {
+            "seconds": float(seconds), "batch_size": 1}},
+        "6": {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "positive": ["4", 0], "negative": ["4", 0],
+            "latent_image": ["5", 0], "seed": seed, "steps": steps, "cfg": cfg,
+            "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+        "7": {"class_type": "VAEDecodeAudio", "inputs": {
+            "samples": ["6", 0], "vae": ["3", 0]}},
+        "8": {"class_type": "SaveAudio", "inputs": {
+            "audio": ["7", 0], "filename_prefix": output_prefix}},
+    }
+    return wf
+
+
+def build_acestep15xl_sft_workflow(
+    style_tags: str,
+    lyrics: str = "",
+    seconds: float = 120.0,
+    seed: int = 42,
+    steps: int = 50,
+    cfg: float = 1.0,
+    bpm: int = 90,
+    language: str = "en",
+    keyscale: str = "C major",
+    unet_name: str = "acestep_v1.5_xl_sft_bf16.safetensors",
+    clip_name_06b: str = "qwen_0.6b_ace15.safetensors",
+    clip_name_17b: str = "qwen_1.7b_ace15.safetensors",
+    vae_name: str = "ace_1.5_vae.safetensors",
+    output_prefix: str = "ai_director_music",
+) -> dict:
+    """ComfyUI API workflow for ACE-Step 1.5 XL SFT (5B, highest quality).
+    50 steps (vs turbo's 8). Same architecture, uses shared CLIP/VAE.
+    18.6GB bf16 model — loaded as fp8 to fit in 16GB VRAM.
+    DualCLIPLoader required: qwen_0.6b (text enc) + qwen_1.7b (LLM audio codes).
+    """
+    wf = {
+        "1": {"class_type": "UNETLoader", "inputs": {
+            "unet_name": unet_name, "weight_dtype": "fp8_e4m3fn"}},
+        "2": {"class_type": "DualCLIPLoader", "inputs": {
+            "clip_name1": clip_name_06b, "clip_name2": clip_name_17b, "type": "ace"}},
         "3": {"class_type": "VAELoader", "inputs": {
             "vae_name": vae_name}},
         "4": {"class_type": "TextEncodeAceStepAudio1.5", "inputs": {

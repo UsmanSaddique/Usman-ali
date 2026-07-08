@@ -173,7 +173,8 @@ class VideoGenService:
                 r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\input"
             )
             comfy_input.mkdir(parents=True, exist_ok=True)
-            img_name = f"i2v_src_{seed}{Path(image_path).suffix or '.png'}"
+            # Ensure unique filename per scene to prevent ComfyUI caching/overwrite errors
+            img_name = f"i2v_src_{seed}_{Path(image_path).stem}{Path(image_path).suffix or '.png'}"
             shutil.copy2(image_path, comfy_input / img_name)
             logger.info(f"[VideoGen] LTX img2vid from still: {img_name}")
             # Push the model toward visible MOTION (the still alone yields a near-static

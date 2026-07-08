@@ -86,6 +86,9 @@ class PipelineOrchestrator:
         self._progress = PipelineProgress()
         self._progress_callbacks: list[Callable[[PipelineProgress], None]] = []
         self._cancel_requested = False
+        self._pause_requested = False
+        # QA accumulator — filled across phases, written as qa_report.json at render
+        self._qa_notes: dict = {"scenes": []}
 
     # ── Progress Management ────────────────────────────────────────────
 
@@ -112,6 +115,18 @@ class PipelineOrchestrator:
         if self._cancel_requested:
             self._cancel_requested = False
             raise PipelineCancelled("Pipeline cancelled by user")
+
+    def request_pause(self):
+        """Request a graceful pause — the pipeline stops after the current item
+        (scene / song version) WITHOUT marking the project failed. All finished
+        work is kept; the same step button resumes from where it stopped."""
+        self._pause_requested = True
+        logger.info("[Pipeline] Pause requested — stopping after the current item")
+
+    def _check_pause(self):
+        if self._pause_requested:
+            self._pause_requested = False
+            raise PipelinePaused("Pipeline paused by user")
 
     # ── Phase 1: Script Generation ─────────────────────────────────────
 
@@ -238,6 +253,56 @@ class PipelineOrchestrator:
             self.manager.unload()
             session.close()
 
+    # ── Phase 1b: Scenes from Lyrics (no LLM — instant, beat-synced) ────
+
+    def generate_scenes_from_lyrics(self, project_id: str, num_clips: Optional[int] = None) -> int:
+        """Build the scene list directly from the project's lyrics: parse into
+        timed segments, one channel-styled img2vid scene per segment. Instant
+        (no LLM load) and the scene timing follows the song structure."""
+        from app.services.lyrics_parser import parse_lyrics
+        from app.services import lyric_scenes
+
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+            lyrics = (project.lyrics or "").strip()
+            if not lyrics:
+                raise ValueError("Project has no lyrics — paste lyrics or use the AI Director script instead")
+
+            duration = float(project.duration_target)
+            n = num_clips or project.num_scenes_target or max(1, int(duration // 5))
+            segments = parse_lyrics(
+                lyrics, duration,
+                max_segments=n,
+                target_segment_sec=duration / n,
+            )
+            profile = self.director.load_channel_profile(project.channel.slug) or {}
+            prompts = lyric_scenes.build_prompts(segments, profile, project_id)
+
+            session.query(Scene).filter(Scene.project_id == project_id).delete()
+            for p in prompts:
+                session.add(Scene(
+                    project_id=project_id,
+                    scene_number=p["segment_index"] + 1,
+                    scene_type=SceneType.IMG2VID,
+                    prompt=p["prompt"],
+                    negative_prompt=p["negative_prompt"],
+                    duration=p["duration"],
+                    camera_motion=p["camera_motion"],
+                    narration_text="",   # the song carries the audio
+                    status=SceneStatus.PENDING,
+                ))
+            project.total_scenes = len(prompts)
+            project.completed_scenes = 0
+            project.status = ProjectStatus.SCRIPTED
+            session.commit()
+            logger.info(f"[Pipeline] {len(prompts)} scenes built from lyrics for {project_id}")
+            return len(prompts)
+        finally:
+            session.close()
+
     # ── Phase 2: TTS Generation ──────────────────────────────────
 
     def generate_tts(self, project_id: str) -> Optional[str]:
@@ -304,13 +369,15 @@ class PipelineOrchestrator:
 
     # ── Phase 3: Asset Generation ──────────────────────────────────────
 
-    def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None, batch: bool = False):
+    def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None, batch: bool = False, upscale_inline: bool = False):
         """
         Generate all scene assets one by one.
         If scene_ids is provided, only generate those specific scenes.
         `batch=True` keeps the video model resident across scenes (skips the
         per-scene local-model unload) so a same-model run (e.g. LTX-22B txt2vid)
         doesn't pay an avoidable reload between scenes.
+        `upscale_inline=True` upscales each clip to the channel target right
+        after it passes QA, so every finished scene is immediately final.
         """
         self._batch_mode = batch
         if batch:
@@ -354,6 +421,7 @@ class PipelineOrchestrator:
 
             for i, scene in enumerate(scenes):
                 self._check_cancel()
+                self._check_pause()
 
                 self._emit_progress(
                     phase=PipelinePhase.GENERATING,
@@ -371,6 +439,39 @@ class PipelineOrchestrator:
                     generation = self._generate_scene(
                         scene, clips_dir, images_dir, session, width=width, height=height
                     )
+
+                    # QA gate: reject truncated/unreadable/static clips so the
+                    # retry path kicks in instead of shipping dead footage.
+                    from app.services import qa as qa_svc
+                    from dataclasses import asdict as _asdict
+                    if generation.output_path and str(generation.output_path).endswith(".mp4"):
+                        motion_thr = 0.0 if scene.scene_type == SceneType.STILL_PAN else 3.0
+                        clip_qa = qa_svc.check_clip(
+                            self.config.paths.ffmpeg_bin,
+                            generation.output_path,
+                            float(scene.duration or 0),
+                            motion_threshold=motion_thr,
+                        )
+                        self._qa_notes.setdefault("scenes", []).append(
+                            {"scene": scene.scene_number, **_asdict(clip_qa)})
+                        if not clip_qa.ok:
+                            raise RuntimeError(
+                                f"QA rejected scene {scene.scene_number}: {', '.join(clip_qa.issues)}")
+
+                    # Inline upscale: finish the clip completely before moving on
+                    if upscale_inline and generation.output_path:
+                        try:
+                            res_map = {"1080p": (1920, 1080), "2k": (2560, 1440), "4k": (3840, 2160)}
+                            tw, th = res_map.get(project.channel.target_resolution, (1920, 1080))
+                            up = self.upscaler.upscale_video(
+                                input_path=generation.output_path,
+                                target_width=tw, target_height=th,
+                                ffmpeg_bin=self.config.paths.ffmpeg_bin,
+                            )
+                            generation.upscaled_path = up.output_path
+                            logger.info(f"[Pipeline] Scene {scene.scene_number} upscaled inline -> {tw}x{th}")
+                        except Exception as up_err:
+                            logger.warning(f"[Pipeline] Inline upscale failed for scene {scene.scene_number} (keeping raw): {up_err}")
 
                     scene.status = SceneStatus.GENERATED
                     scene.active_generation_id = generation.id
@@ -426,6 +527,25 @@ class PipelineOrchestrator:
 
             session.commit()
 
+        except PipelinePaused:
+            logger.info("[Pipeline] Generation paused by user — finished clips kept")
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    # resumable state: Generate All / resume picks up the
+                    # remaining PENDING/FAILED scenes
+                    project.status = ProjectStatus.SCRIPTED
+                    project.error_log = None
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on pause: {dbe}")
+            self._emit_progress(
+                phase=PipelinePhase.IDLE,
+                message="Paused — finished clips are saved; resume anytime",
+                percent=0.0,
+            )
+            raise
+
         except PipelineCancelled as ce:
             logger.info(f"[Pipeline] Generation cancelled: {ce}")
             try:
@@ -436,7 +556,7 @@ class PipelineOrchestrator:
                     session.commit()
             except Exception as dbe:
                 logger.error(f"Failed to update project status on cancel: {dbe}")
-            
+
             self._emit_progress(
                 phase=PipelinePhase.ERROR,
                 error="Cancelled",
@@ -547,8 +667,15 @@ class PipelineOrchestrator:
         else:
             scene_loras = project_loras
 
-        sdxl_path = str(self.config.image.path)
-        sdxl_available = sdxl_path and os.path.exists(sdxl_path)
+        # Still-image engine availability: Z-Image-Turbo (primary) or SDXL fallback.
+        ic = self.config.image
+        image_engine = getattr(ic, "engine", "sdxl")
+        sdxl_available = os.path.exists(str(ic.path))
+        zimage_available = (
+            self.config.paths.models_dir / "diffusion_models"
+            / getattr(ic, "zimage_unet", "z_image_turbo_bf16.safetensors")
+        ).exists()
+        image_available = (zimage_available or sdxl_available) if image_engine == "zimage" else sdxl_available
 
         try:
             if scene.scene_type == SceneType.TXT2VID:
@@ -573,8 +700,8 @@ class PipelineOrchestrator:
                 }
 
             elif scene.scene_type == SceneType.IMG2VID:
-                if not sdxl_available:
-                    logger.warning(f"[Pipeline] Scene {scene.scene_number}: SDXL not available, falling back to txt2vid")
+                if not image_available:
+                    logger.warning(f"[Pipeline] Scene {scene.scene_number}: no image engine available, falling back to txt2vid")
                     result = self.video_gen.txt2vid(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
@@ -606,6 +733,8 @@ class PipelineOrchestrator:
                         height=height,
                         seed=scene_seed,
                     )
+                    gen.thumbnail_path = img_result.path
+                    session.commit()
                     self.manager.unload()
 
                     # 2. Img2Vid
@@ -621,7 +750,7 @@ class PipelineOrchestrator:
                         height=height,
                         seed=scene_seed,
                     )
-                    gen.model_used = f"sdxl+{result.model_used}"
+                    gen.model_used = f"{image_engine}+{result.model_used}"
                     gen.thumbnail_path = img_result.path
                     gen.generation_time_sec = img_result.generation_time + result.generation_time
 
@@ -631,8 +760,8 @@ class PipelineOrchestrator:
                     gen.generation_time_sec = result.generation_time
 
             elif scene.scene_type == SceneType.STILL_PAN:
-                if not sdxl_available:
-                    logger.warning(f"[Pipeline] Scene {scene.scene_number}: SDXL not available, falling back to txt2vid for still_pan")
+                if not image_available:
+                    logger.warning(f"[Pipeline] Scene {scene.scene_number}: no image engine available, falling back to txt2vid for still_pan")
                     result = self.video_gen.txt2vid(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
@@ -685,7 +814,7 @@ class PipelineOrchestrator:
                         pan_y=pan_y,
                         ffmpeg_bin=self.config.paths.ffmpeg_bin,
                     )
-                    gen.model_used = "sdxl+kenburns"
+                    gen.model_used = f"{image_engine}+kenburns"
                     gen.output_path = result.path
                     gen.seed = img_result.seed
                     gen.generation_time_sec = img_result.generation_time + result.generation_time
@@ -697,8 +826,9 @@ class PipelineOrchestrator:
             gen.status = GenerationStatus.COMPLETED
 
         except Exception as e:
+            import traceback
             gen.status = GenerationStatus.FAILED
-            gen.error_log = str(e)
+            gen.error_log = traceback.format_exc()
             raise
 
         return gen
@@ -779,9 +909,16 @@ class PipelineOrchestrator:
 
             for i, scene in enumerate(scenes):
                 self._check_cancel()
+                self._check_pause()
 
                 gen = scene.active_generation
                 if not gen or not gen.output_path:
+                    continue
+
+                # Resume-friendly: already upscaled (earlier run / inline) → skip
+                if gen.upscaled_path and gen.upscaled_path != gen.output_path \
+                        and Path(gen.upscaled_path).exists():
+                    logger.info(f"[Pipeline] Scene {scene.scene_number} already upscaled, skipping")
                     continue
 
                 self._emit_progress(
@@ -818,6 +955,23 @@ class PipelineOrchestrator:
                 message="Upscaling complete",
                 percent=100.0,
             )
+
+        except PipelinePaused:
+            logger.info("[Pipeline] Upscale paused by user — finished upscales kept")
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.GENERATED  # resumable
+                    project.error_log = None
+                    session.commit()
+            except Exception as dbe:
+                logger.error(f"Failed to update project status on pause: {dbe}")
+            self._emit_progress(
+                phase=PipelinePhase.IDLE,
+                message="Upscaling paused — finished upscales are saved; resume anytime",
+                percent=0.0,
+            )
+            raise
 
         except PipelineCancelled as ce:
             logger.info(f"[Pipeline] Upscale cancelled: {ce}")
@@ -861,8 +1015,20 @@ class PipelineOrchestrator:
 
     # ── Phase 5: Music Generation ─────────────────────────────────
 
-    def generate_music(self, project_id: str) -> Optional[str]:
-        """Generate background music track using HeartMuLa 3B (or ACE-Step fallback)."""
+    def generate_music(
+        self,
+        project_id: str,
+        style: Optional[str] = None,
+        lyrics: Optional[str] = None,
+        engine: Optional[str] = None,
+        vocals: Optional[bool] = None,
+    ) -> Optional[str]:
+        """Generate the project's music track.
+
+        Precedence for creative inputs: explicit args → project fields
+        (lyrics/music_style/music_model from the wizard) → channel profile.
+        A song with lyrics becomes a full vocal track that carries the video.
+        """
         session = get_session()
         try:
             project = session.query(Project).get(project_id)
@@ -879,9 +1045,28 @@ class PipelineOrchestrator:
             profile = self.director.load_channel_profile(channel.slug)
 
             project_dir = self.config.paths.projects_dir / project_id
+            project_dir.mkdir(parents=True, exist_ok=True)
             music_path = str(project_dir / "music.wav")
 
-            if profile:
+            use_lyrics = lyrics if lyrics is not None else (project.lyrics or "")
+            if vocals is False:
+                use_lyrics = ""
+            use_style = style or project.music_style or ""
+            use_engine = engine or getattr(project, "music_model", None) or "auto"
+
+            if use_lyrics or use_style:
+                # Song mode / custom style — the music is the star
+                music_cfg = (profile or {}).get("music", {})
+                result = self.music_gen.generate(
+                    style_prompt=use_style or music_cfg.get("style", "cheerful children's song"),
+                    duration=int(project.duration_target) + 2,
+                    lyrics=use_lyrics,
+                    output_path=music_path,
+                    instrumental=not bool(use_lyrics.strip()),
+                    channel_profile=profile,
+                    engine=use_engine,
+                )
+            elif profile:
                 result = self.music_gen.generate_for_channel(
                     channel_profile=profile,
                     video_duration=project.duration_target,
@@ -898,7 +1083,11 @@ class PipelineOrchestrator:
             # Unload music model
             self.manager.unload()
 
-            # Save to DB
+            # Save to DB — new track supersedes previous ones
+            session.query(MusicTrack).filter(
+                MusicTrack.project_id == project_id,
+                MusicTrack.is_active == True,
+            ).update({"is_active": False})
             track = MusicTrack(
                 project_id=project_id,
                 style_prompt=result.style_prompt,
@@ -916,6 +1105,124 @@ class PipelineOrchestrator:
             )
 
             return result.path
+
+        finally:
+            session.close()
+
+    # Style tweaks applied on top of the base style for the song-audition
+    # round — same lyrics every time, different musical treatment. v1 is
+    # always the user's exact style, untouched.
+    MUSIC_VARIANT_TWEAKS = [
+        "",
+        "upbeat tempo, bright ukulele and acoustic guitar, sunny feel",
+        "playful bouncy rhythm, glockenspiel, hand claps, marimba",
+        "sweet solo female vocal, warm and clear, soft pop arrangement",
+        "warm male vocal, gentle folk acoustic, storyteller feel",
+        "kids choir, sing-along clap-along energy, tambourine",
+        "duet — lead vocal with children's choir answering each line",
+        "gentle lullaby feel, soft piano, music box, dreamy and calm",
+        "orchestral children's movie style, strings, flute, magical",
+        "modern kids TV theme, catchy pop production, energetic chorus",
+    ]
+
+    def generate_music_variants(
+        self,
+        project_id: str,
+        count: int = 10,
+        style: Optional[str] = None,
+        lyrics: Optional[str] = None,
+        engine: Optional[str] = None,
+        vocals: Optional[bool] = None,
+        offset: int = 0,
+    ) -> list[str]:
+        """Song audition round: generate `count` versions of the song — same
+        lyrics, tweaked styles — saved as inactive MusicTracks. None becomes
+        the project's music until the user picks one (select-music endpoint).
+        The music model stays loaded across the whole batch (one load, N songs).
+        `offset` skips the first N style tweaks — used when resuming a paused
+        batch so no style is generated twice. A pause request stops the batch
+        gracefully after the current version.
+        """
+        session = get_session()
+        generated: list[str] = []
+        try:
+            project = session.query(Project).get(project_id)
+            channel = project.channel
+            profile = self.director.load_channel_profile(channel.slug)
+            music_cfg = (profile or {}).get("music", {})
+
+            project_dir = self.config.paths.projects_dir / project_id
+            project_dir.mkdir(parents=True, exist_ok=True)
+
+            use_lyrics = lyrics if lyrics is not None else (project.lyrics or "")
+            if vocals is False:
+                use_lyrics = ""
+            base_style = (style or project.music_style
+                          or music_cfg.get("style", "cheerful children's song"))
+            use_engine = engine or getattr(project, "music_model", None) or "auto"
+
+            offset = max(0, min(offset, len(self.MUSIC_VARIANT_TWEAKS) - 1))
+            end = min(offset + max(1, count), len(self.MUSIC_VARIANT_TWEAKS))
+            count = end - offset
+            batch_tag = int(time.time())
+            for n, i in enumerate(range(offset, end)):
+                if self._pause_requested:
+                    # graceful pause between versions — everything done so far
+                    # is kept; the wizard's Resume button continues from here
+                    self._pause_requested = False
+                    logger.info(f"[Pipeline] Music batch paused after {len(generated)}/{count} versions")
+                    self._emit_progress(
+                        phase=PipelinePhase.IDLE,
+                        project_id=project_id,
+                        message=f"Music paused — {len(generated)} version(s) saved, resume anytime",
+                        percent=100.0,
+                    )
+                    return generated
+
+                tweak = self.MUSIC_VARIANT_TWEAKS[i]
+                v_style = f"{base_style}, {tweak}" if tweak else base_style
+                out_path = str(project_dir / f"music_v{batch_tag}_{i + 1:02d}.wav")
+
+                self._emit_progress(
+                    phase=PipelinePhase.MUSIC,
+                    project_id=project_id,
+                    message=f"Song version {n + 1}/{count}…",
+                    percent=100.0 * n / count,
+                )
+                try:
+                    result = self.music_gen.generate(
+                        style_prompt=v_style,
+                        duration=int(project.duration_target) + 2,
+                        lyrics=use_lyrics,
+                        output_path=out_path,
+                        instrumental=not bool(use_lyrics.strip()),
+                        channel_profile=profile,
+                        engine=use_engine,
+                    )
+                except Exception as e:
+                    logger.warning(f"[Pipeline] Song version {i + 1}/{count} failed: {e}")
+                    continue
+
+                # inactive on purpose — the user auditions and selects one
+                track = MusicTrack(
+                    project_id=project_id,
+                    style_prompt=v_style,
+                    output_path=result.path,
+                    duration=result.duration,
+                    is_active=False,
+                )
+                session.add(track)
+                session.commit()
+                generated.append(result.path)
+
+            self.manager.unload()
+            self._emit_progress(
+                phase=PipelinePhase.IDLE,
+                project_id=project_id,
+                message=f"{len(generated)} song versions ready — pick your favourite",
+                percent=100.0,
+            )
+            return generated
 
         finally:
             session.close()
@@ -1016,6 +1323,26 @@ class PipelineOrchestrator:
 
             project.output_path = result.output_path
             project.status = ProjectStatus.RENDERED
+
+            # Final QA: plays, ~target duration, HD, audio present — then persist
+            # qa_report.json so overnight runs are diagnosable at a glance.
+            try:
+                from app.services import qa as qa_svc
+                from dataclasses import asdict as _asdict
+                final_qa = qa_svc.check_final(
+                    self.config.paths.ffmpeg_bin,
+                    result.output_path,
+                    float(project.duration_target or 0),
+                    expect_audio=bool(music_path or narration_path),
+                )
+                self._qa_notes["final"] = _asdict(final_qa)
+                if not final_qa.ok:
+                    logger.warning(f"[QA] Final render issues: {', '.join(final_qa.issues)}")
+                    project.error_log = f"QA warnings: {', '.join(final_qa.issues)}"
+                qa_svc.write_report(project_dir, self._qa_notes)
+            except Exception as qa_err:
+                logger.warning(f"[QA] final check failed (non-fatal): {qa_err}")
+
             session.commit()
 
             self._emit_progress(
@@ -1077,6 +1404,28 @@ class PipelineOrchestrator:
         logger.info(f"[Pipeline] Starting full auto run for project {project_id}")
 
         try:
+            # QA gate 0: preflight — verify engines/models/ffmpeg/disk BEFORE
+            # burning GPU time. An overnight run must fail in 5 seconds, not 5 hours.
+            from app.services import qa as qa_svc
+            self._qa_notes = {"scenes": []}
+            pf = qa_svc.preflight(self.config)
+            self._qa_notes["preflight"] = pf.to_dict()
+            if not pf.ok:
+                session = get_session()
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = f"Preflight failed: {pf.summary()}"
+                    session.commit()
+                session.close()
+                qa_svc.write_report(self.config.paths.projects_dir / project_id, self._qa_notes)
+                self._emit_progress(
+                    phase=PipelinePhase.ERROR,
+                    error="preflight",
+                    message=f"Preflight failed: {pf.summary()}",
+                )
+                return
+
             # Check current status to skip completed phases
             session = get_session()
             project = session.query(Project).get(project_id)
@@ -1088,12 +1437,41 @@ class PipelineOrchestrator:
 
             logger.info(f"[Pipeline] Project status: {current_status}, has_scenes: {has_scenes}")
 
-            # Phase 1: Script — only if no script exists yet
+            # Phase 1: Script — only if no script exists yet.
+            # Song projects (lyrics present) get instant beat-synced scenes;
+            # story projects go through the director LLM.
             if current_status == ProjectStatus.DRAFT or not has_scenes:
-                logger.info("[Pipeline] Phase 1: Generating script...")
-                self.generate_script(project_id)
+                session = get_session()
+                p = session.query(Project).get(project_id)
+                has_lyrics = bool((p.lyrics or "").strip())
+                session.close()
+                if has_lyrics:
+                    logger.info("[Pipeline] Phase 1: Building scenes from lyrics (song mode)...")
+                    self.generate_scenes_from_lyrics(project_id)
+                else:
+                    logger.info("[Pipeline] Phase 1: Generating script...")
+                    self.generate_script(project_id)
             else:
                 logger.info(f"[Pipeline] Phase 1: Skipping script generation (status={current_status}, scenes exist)")
+
+            # QA gate 1: creative lint — enforce channel framing/negatives/scene
+            # types and normalize durations to the exact target, with auto-fixes.
+            try:
+                session = get_session()
+                project = session.query(Project).get(project_id)
+                scenes = session.query(Scene).filter(
+                    Scene.project_id == project_id
+                ).order_by(Scene.scene_number).all()
+                profile = self.director.load_channel_profile(project.channel.slug) or {}
+                lo, hi = self.config.generation.clip_duration_range
+                if scenes:
+                    lo = min(lo, float(project.duration_target) / len(scenes))
+                self._qa_notes["lint"] = qa_svc.lint_script(
+                    scenes, profile, float(project.duration_target), (lo, hi))
+                session.commit()
+                session.close()
+            except Exception as lint_err:
+                logger.warning(f"[Pipeline] Script lint failed (continuing): {lint_err}")
 
             # Auto-approve all scenes
             session = get_session()
@@ -1124,30 +1502,51 @@ class PipelineOrchestrator:
             # 832x480 = 16:9 (YouTube-native) AND VRAM-safe for LTX-22B on 16GB
             # (1024x576 spills to system RAM). batch=True keeps the model resident.
             logger.info("[Pipeline] Phase 3: Starting asset generation...")
-            self.start_generation(project_id, width=832, height=480, batch=True)
+            session = get_session()
+            p = session.query(Project).get(project_id)
+            inline = bool(getattr(p, "upscale_inline", True))
+            session.close()
+            self.start_generation(project_id, width=832, height=480, batch=True,
+                                  upscale_inline=inline)
 
-            # Phase 4: Upscale
+            # Phase 4: Upscale (skips scenes already upscaled inline / previous run)
             try:
                 self.start_upscale(project_id)
             except Exception as upscale_err:
                 logger.warning(f"[Pipeline] Upscale failed (continuing): {upscale_err}")
 
-            # Phase 5: Music — prefer a user-supplied song file, else generate
+            # Phase 5: Music — user file > existing generated track (resume) > generate
             music_path = self._find_user_audio(project_id, "music")
             if music_path:
                 logger.info(f"[Pipeline] Using your custom song: {music_path}")
             else:
-                try:
-                    music_path = self.generate_music(project_id)
-                except Exception as music_err:
-                    logger.warning(f"[Pipeline] Music generation failed (skipping): {music_err}")
-                    music_path = None
+                session = get_session()
+                existing = session.query(MusicTrack).filter(
+                    MusicTrack.project_id == project_id,
+                    MusicTrack.is_active == True,
+                ).first()
+                music_path = existing.output_path if existing else None
+                session.close()
+                if music_path and Path(music_path).exists():
+                    logger.info(f"[Pipeline] Reusing existing music track: {music_path}")
+                else:
+                    try:
+                        music_path = self.generate_music(project_id)
+                    except Exception as music_err:
+                        logger.warning(f"[Pipeline] Music generation failed (skipping): {music_err}")
+                        music_path = None
 
             # Phase 6: Render
             self.render(project_id, narration_path=narration_path, music_path=music_path)
 
             logger.info(f"[Pipeline] Full auto complete for project {project_id}")
 
+        except PipelinePaused:
+            logger.info(f"[Pipeline] Paused for project {project_id} — resume anytime")
+            self._emit_progress(
+                phase=PipelinePhase.IDLE,
+                message="Pipeline paused — progress saved, resume anytime",
+            )
         except PipelineCancelled:
             logger.info(f"[Pipeline] Cancelled for project {project_id}")
             self._emit_progress(
@@ -1164,4 +1563,10 @@ class PipelineOrchestrator:
 
 
 class PipelineCancelled(Exception):
+    pass
+
+
+class PipelinePaused(Exception):
+    """Graceful pause: stop after the current item, keep all finished work,
+    leave the project in a resumable (non-failed) state."""
     pass

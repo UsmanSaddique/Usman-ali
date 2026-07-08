@@ -72,12 +72,21 @@ class LLMModelConfig(BaseModel):
 
 
 class ImageModelConfig(BaseModel):
-    """SDXL image generation via diffusers."""
+    """Still-image generation. Z-Image-Turbo (primary) with SDXL fallback.
+
+    Z-Image-Turbo (6B, Apache-2.0) replaced SDXL+LoRAs as the still generator:
+    faster (8 steps, cfg 1, no negative prompt) and far better character
+    fidelity — correct taqiyah/kurta, consistent faces, clean 3D render."""
+    engine: str = "zimage"       # "zimage" (best character fidelity) or "sdxl"
+    zimage_unet: str = "z_image_turbo_bf16.safetensors"
+    zimage_steps: int = 9
+    zimage_shift: float = 3.0
+    zimage_min_height: int = 720  # floor still height near Z-Image's native ~1MP budget
     name: str = "sdxl-base-1.0"
     path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\sd_xl_base_1.0.safetensors")
     dtype: str = "float16"       # float16 or bfloat16
     scheduler: str = "euler_a"   # euler_a, dpm++_2m_karras, ddim
-    default_steps: int = 30      # 30 base + hires pass is plenty with the Samaritan LoRA (faster than 40)
+    default_steps: int = 36      # 20% more steps for better detail (faces, hands, eyes)
     default_cfg: float = 7.0
     default_width: int = 1280
     default_height: int = 720
@@ -89,7 +98,7 @@ class ImageModelConfig(BaseModel):
     hires: bool = True           # two-pass hires-fix refine
     hires_scale: float = 1.5
     hires_denoise: float = 0.45
-    hires_steps: int = 15        # refine pass; 15 is enough at denoise 0.45 (faster)
+    hires_steps: int = 18        # refine pass; 20% more for sharper faces/details
     enable_vae_slicing: bool = False
     enable_vae_tiling: bool = False
     # Style + character LoRAs applied to SDXL stills, as [(filename, weight)].
@@ -99,7 +108,8 @@ class ImageModelConfig(BaseModel):
     # Tuned weights: too high (0.9+) over-bakes and adds noise; ~0.5 = clean + consistent.
     # Samaritan 3D Cartoon gives a clean crisp 3D render (pixar-style.safetensors on
     # SDXL base looked like a smeared oil painting). Keep yusuf for character identity.
-    style_loras: list = [("samaritan-3d-cartoon-lora.safetensors", 0.9), ("yusuf_v1.safetensors", 0.5)]
+    # (yusuf_v1.safetensors was deleted — it hurt results; Z-Image needs no character LoRA)
+    style_loras: list = [("samaritan-3d-cartoon-lora.safetensors", 0.9)]
 
 
 class VideoModelConfig(BaseModel):
@@ -114,7 +124,7 @@ class VideoModelConfig(BaseModel):
     default_height: int = 512
     default_num_frames: int = 121  # ~5s at 24fps
     default_fps: int = 24
-    default_steps: int = 8        # distilled = fewer steps
+    default_steps: int = 10       # 10 steps = good quality/speed balance on 16GB (12 too slow with LoRAs)
     default_cfg: float = 1.0      # distilled models use low cfg
     seed: int = -1                # -1 = random
     # img2vid: higher = clip stays closer to the (clean) still -> less hair/shirt

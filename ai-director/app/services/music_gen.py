@@ -154,11 +154,9 @@ def _parse_style_tags(style_prompt: str, channel_profile: dict = None) -> dict:
 
 class MusicGenService:
     """
-    Generate background music — HeartMuLa 3B (primary), ACE-Step (fallback).
+    Generate background music — ACE-Step 1.5 XL SFT (primary), Turbo, HeartMuLa, v1.0 fallbacks.
 
-    HeartMuLa runs via ComfyUI_FL-HeartMuLa custom nodes with 4-bit
-    quantization (~4.9GB VRAM). Falls back to ACE-Step if HeartMuLa
-    nodes are not installed.
+    Priority: SFT (50-step, highest quality) → Turbo (8-step, fast) → HeartMuLa 3B → ACE-Step v1.0.
     """
 
     def __init__(self, model_manager: ModelManager, config):
@@ -174,7 +172,10 @@ class MusicGenService:
         output_path: Optional[str] = None,
         instrumental: bool = True,
         channel_profile: dict = None,
+        engine: str = "auto",
     ) -> MusicResult:
+        """`engine` pins a specific generator ("sft"|"turbo"|"heartmula"|"ace1");
+        "auto" tries them in quality order with fallback."""
         if not output_path:
             output_path = str(
                 self.config.paths.assets_dir / "music" / f"music_{int(time.time())}.wav"
@@ -182,55 +183,44 @@ class MusicGenService:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
         t0 = time.time()
-        logger.info(f"[MusicGen] Generating {duration}s track: {style_prompt[:80]}")
+        logger.info(f"[MusicGen] Generating {duration}s track (engine={engine}): {style_prompt[:80]}")
 
-        # 1. Try ACE-Step 1.5 XL Turbo (best quality — commercial grade)
-        try:
-            self._generate_acestep15xl(
-                style_prompt=style_prompt, duration=duration,
-                lyrics="" if instrumental else (lyrics or ""),
-                instrumental=instrumental, output_path=output_path,
-                channel_profile=channel_profile,
-            )
-            elapsed = time.time() - t0
-            logger.info(f"[MusicGen] ACE-Step 1.5 XL done in {elapsed:.1f}s -> {output_path}")
-            return MusicResult(path=output_path, duration=duration,
-                               sample_rate=48000, style_prompt=style_prompt,
-                               generation_time=elapsed)
-        except Exception as e:
-            logger.warning(f"[MusicGen] ACE-Step 1.5 XL unavailable ({e}); trying HeartMuLa")
+        lyrics_arg = "" if instrumental else (lyrics or "")
 
-        # 2. Fallback: HeartMuLa via ComfyUI
-        try:
-            self._generate_heartmula(
-                style_prompt=style_prompt, duration=duration,
-                lyrics="" if instrumental else (lyrics or ""),
-                instrumental=instrumental, output_path=output_path,
-                channel_profile=channel_profile,
-            )
-            elapsed = time.time() - t0
-            logger.info(f"[MusicGen] HeartMuLa done in {elapsed:.1f}s -> {output_path}")
-            return MusicResult(path=output_path, duration=duration,
-                               sample_rate=48000, style_prompt=style_prompt,
-                               generation_time=elapsed)
-        except Exception as e:
-            logger.warning(f"[MusicGen] HeartMuLa unavailable ({e}); trying ACE-Step v1 fallback")
+        chain = [
+            ("sft", "ACE-Step 1.5 XL SFT", lambda: self._generate_acestep15xl_sft(
+                style_prompt=style_prompt, duration=duration, lyrics=lyrics_arg,
+                instrumental=instrumental, output_path=output_path, channel_profile=channel_profile)),
+            ("turbo", "ACE-Step 1.5 XL Turbo", lambda: self._generate_acestep15xl(
+                style_prompt=style_prompt, duration=duration, lyrics=lyrics_arg,
+                instrumental=instrumental, output_path=output_path, channel_profile=channel_profile)),
+            ("heartmula", "HeartMuLa", lambda: self._generate_heartmula(
+                style_prompt=style_prompt, duration=duration, lyrics=lyrics_arg,
+                instrumental=instrumental, output_path=output_path, channel_profile=channel_profile)),
+            ("ace1", "ACE-Step v1", lambda: self._generate_acestep(
+                style_prompt=style_prompt, duration=duration, lyrics=lyrics_arg,
+                instrumental=instrumental, output_path=output_path)),
+        ]
+        if engine != "auto":
+            chain = [c for c in chain if c[0] == engine]
+            if not chain:
+                raise ValueError(f"Unknown music engine '{engine}'")
 
-        # 3. Last fallback: ACE-Step v1.0 via ComfyUI
-        try:
-            self._generate_acestep(
-                style_prompt=style_prompt, duration=duration,
-                lyrics="" if instrumental else (lyrics or ""),
-                instrumental=instrumental, output_path=output_path,
-            )
-            elapsed = time.time() - t0
-            logger.info(f"[MusicGen] ACE-Step v1 done in {elapsed:.1f}s -> {output_path}")
-            return MusicResult(path=output_path, duration=duration,
-                               sample_rate=self.config.music.default_sample_rate,
-                               style_prompt=style_prompt, generation_time=elapsed)
-        except Exception as e:
-            logger.error(f"[MusicGen] All music generation methods failed: {e}")
-            raise RuntimeError(f"Music generation failed — no engine available: {e}")
+        last_err = None
+        for key, label, fn in chain:
+            try:
+                fn()
+                elapsed = time.time() - t0
+                logger.info(f"[MusicGen] {label} done in {elapsed:.1f}s -> {output_path}")
+                return MusicResult(path=output_path, duration=duration,
+                                   sample_rate=48000, style_prompt=style_prompt,
+                                   generation_time=elapsed)
+            except Exception as e:
+                last_err = e
+                logger.warning(f"[MusicGen] {label} unavailable ({e})"
+                               + ("; trying next" if engine == "auto" else ""))
+
+        raise RuntimeError(f"Music generation failed — engine(s) unavailable: {last_err}")
 
     def generate_for_channel(
         self,
@@ -265,7 +255,69 @@ class MusicGenService:
             channel_profile=channel_profile,
         )
 
-    # ── ACE-Step 1.5 XL via ComfyUI (primary — commercial grade) ──
+    # ── ACE-Step 1.5 XL SFT via ComfyUI (highest quality — 50 steps) ──
+
+    def _generate_acestep15xl_sft(
+        self, style_prompt: str, duration: int, lyrics: str,
+        instrumental: bool, output_path: str,
+        channel_profile: dict = None,
+    ) -> None:
+        from app.services.comfyui_client import ComfyUIClient, build_acestep15xl_sft_workflow
+
+        sft_dir = self.config.paths.models_dir / "diffusion_models" / "acestep-v15-xl-sft"
+        if not (sft_dir / "model.safetensors.index.json").exists():
+            raise RuntimeError("ACE-Step 1.5 XL SFT model not downloaded")
+
+        client = ComfyUIClient()
+        if not client.wait_ready(30):
+            raise RuntimeError("ComfyUI not reachable for ACE-Step 1.5 XL SFT")
+
+        client.free_vram()
+        self.manager.unload()
+
+        tags = _parse_style_tags(style_prompt, channel_profile)
+
+        tag_parts = [tags["genre"]]
+        if tags["vocal_type"] != "instrumental":
+            tag_parts.append(tags["vocal_type"])
+        else:
+            tag_parts.append("instrumental")
+        tag_parts.append(tags["mood"])
+        if tags["instruments"]:
+            tag_parts.append(tags["instruments"])
+        if "islamic" in style_prompt.lower() or "nasheed" in style_prompt.lower():
+            tag_parts.append("middle eastern")
+        if "kids" in style_prompt.lower() or "children" in style_prompt.lower():
+            tag_parts.append("children's music")
+        clean_tags = ", ".join(tag_parts)
+
+        bpm_map = {"very slow": 60, "slow": 75, "medium": 100, "fast": 130, "very fast": 160}
+        bpm = bpm_map.get(tags["tempo"], 100)
+
+        lang = "en"
+        music_cfg = (channel_profile or {}).get("music", {})
+        if "urdu" in style_prompt.lower() or "urdu" in str(music_cfg).lower():
+            lang = "ur"
+        elif "hindi" in style_prompt.lower():
+            lang = "hi"
+        elif "arabic" in style_prompt.lower():
+            lang = "ar"
+
+        logger.info(f"[MusicGen] ACE-Step 1.5 XL SFT tags: {clean_tags} | bpm={bpm} | lang={lang}")
+
+        wf = build_acestep15xl_sft_workflow(
+            style_tags=clean_tags,
+            lyrics=lyrics,
+            seconds=float(duration),
+            seed=random.randint(0, 2**31 - 1),
+            bpm=bpm,
+            language=lang,
+        )
+        prompt_id = client.submit(wf)
+        history = client.wait_for_completion(prompt_id, timeout=1800, poll=3.0)
+        client.collect_output(history, output_path)
+
+    # ── ACE-Step 1.5 XL Turbo via ComfyUI (fast — 8 steps) ──
 
     def _generate_acestep15xl(
         self, style_prompt: str, duration: int, lyrics: str,

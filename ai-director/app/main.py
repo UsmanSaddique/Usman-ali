@@ -222,6 +222,31 @@ class CreateProjectReq(BaseModel):
     video_model: Optional[str] = None
     lora_ids: Optional[list[str]] = None
     lora_weights: Optional[list[float]] = None
+    lyrics: Optional[str] = None          # song mode: drives music vocals + scene timing
+    music_style: Optional[str] = None
+    music_model: Optional[str] = None     # auto|sft|turbo|heartmula|ace1
+    upscale_inline: Optional[bool] = None
+
+
+class MusicGenReq(BaseModel):
+    """Optional overrides for the music step (wizard step 2)."""
+    engine: Optional[str] = None          # auto|sft|turbo|heartmula|ace1
+    style: Optional[str] = None
+    lyrics: Optional[str] = None
+    vocals: Optional[bool] = None
+
+
+class MusicVariantsReq(MusicGenReq):
+    """Song audition round: N versions, same lyrics, tweaked styles."""
+    count: int = 10
+    resume: bool = False   # continue a paused/incomplete batch (server computes the offset)
+
+
+class ScenesFromLyricsReq(BaseModel):
+    num_clips: Optional[int] = None
+
+class ManualScenesReq(BaseModel):
+    prompts: list[str]
 
 class UpdateProjectReq(BaseModel):
     title: Optional[str] = None
@@ -237,6 +262,7 @@ class GenerateScenesReq(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     batch: bool = False   # keep the video model resident across scenes (skip per-scene unload)
+    upscale_inline: bool = False  # upscale each clip right after it generates
 
 class UpdateSceneReq(BaseModel):
     prompt: Optional[str] = None
@@ -244,6 +270,16 @@ class UpdateSceneReq(BaseModel):
     scene_type: Optional[str] = None
     duration: Optional[float] = None
     camera_motion: Optional[str] = None
+
+class ProduceReq(BaseModel):
+    """One-call automation: create a project and run the full pipeline."""
+    channel_slug: str
+    title: str
+    duration: int = 60            # seconds
+    num_scenes: Optional[int] = None
+    context: str = ""
+    video_model: Optional[str] = None
+
 
 class CreateChannelReq(BaseModel):
     name: str
@@ -279,6 +315,10 @@ def create_project(req: CreateProjectReq, db: Session = Depends(get_db)):
         video_model=req.video_model or "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf",
         default_lora_ids=req.lora_ids or [],
         default_lora_weights=req.lora_weights or [],
+        lyrics=req.lyrics,
+        music_style=req.music_style,
+        music_model=req.music_model or "auto",
+        upscale_inline=True if req.upscale_inline is None else req.upscale_inline,
     )
     db.add(project)
     db.commit()
@@ -304,6 +344,18 @@ def list_projects(db: Session = Depends(get_db)):
     ]
 
 
+def _media_url(path: Optional[str]) -> Optional[str]:
+    """Absolute file path under projects/ → served URL (/projects/...)."""
+    if not path:
+        return None
+    try:
+        projects_root = (Path(__file__).parent.parent / "projects").resolve()
+        rel = Path(path).resolve().relative_to(projects_root)
+        return "/projects/" + str(rel).replace("\\", "/")
+    except Exception:
+        return None
+
+
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).get(project_id)
@@ -313,6 +365,7 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
     scenes_data = []
     for s in project.scenes:
         gen = s.active_generation
+        clip_path = (gen.upscaled_path or gen.output_path) if gen else None
         scenes_data.append({
             "id": s.id,
             "scene_number": s.scene_number,
@@ -326,19 +379,58 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
             "narration_text": s.narration_text,
             "versions": len(s.generations),
             "active_version": gen.version if gen else None,
-            "clip_path": (gen.upscaled_path or gen.output_path) if gen else None,
+            "clip_path": clip_path,
+            "clip_url": _media_url(clip_path),
             "thumbnail_path": gen.thumbnail_path if gen else None,
+            "thumb_url": _media_url(gen.thumbnail_path if gen else None),
+            "upscaled": bool(gen and gen.upscaled_path and gen.upscaled_path != gen.output_path),
         })
+
+    # Music tracks — the active one plays in the wizard; the full list is the
+    # song-audition picker (10 versions, same lyrics, tweaked styles)
+    from app.database import MusicTrack
+    all_tracks = db.query(MusicTrack).filter(
+        MusicTrack.project_id == project_id,
+    ).order_by(MusicTrack.created_at).all()
+    music = next((t for t in reversed(all_tracks) if t.is_active), None)
+    music_info = {
+        "url": _media_url(music.output_path) if music else None,
+        "path": music.output_path if music else None,
+        "duration": music.duration if music else 0,
+        "generating": project_id in _music_jobs,
+    }
+    batch = _music_batches.get(project_id)
+    if batch:
+        music_info["batch"] = {
+            "total": batch["total"],
+            "done": max(0, len(all_tracks) - batch["baseline"]),
+            "running": project_id in _music_jobs,
+        }
+    music_variants = [{
+        "id": t.id,
+        "url": _media_url(t.output_path),
+        "style": t.style_prompt,
+        "duration": t.duration,
+        "active": bool(t.is_active),
+    } for t in all_tracks if t.output_path and Path(t.output_path).exists()]
 
     return {
         "id": project.id,
         "title": project.title,
         "status": project.status.value,
         "duration_target": project.duration_target,
+        "num_scenes_target": project.num_scenes_target,
         "context": project.context,
+        "lyrics": project.lyrics,
+        "music_style": project.music_style,
+        "music_model": project.music_model,
+        "upscale_inline": project.upscale_inline,
+        "music": music_info,
+        "music_variants": music_variants,
         "total_scenes": project.total_scenes,
         "completed_scenes": project.completed_scenes,
         "output_path": project.output_path,
+        "error_log": project.error_log,
         "video_model": project.video_model,
         "default_lora_ids": project.default_lora_ids or [],
         "default_lora_weights": project.default_lora_weights or [],
@@ -422,8 +514,11 @@ def start_generation(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Project not found")
 
     def run():
+        from app.services.pipeline import PipelinePaused
         try:
             pipeline.start_generation(project_id)
+        except PipelinePaused:
+            logger.info(f"Generation paused for project {project_id}")
         except Exception as e:
             logger.error(f"Generation failed: {e}", exc_info=True)
 
@@ -455,9 +550,13 @@ def generate_scenes(project_id: str, req: GenerateScenesReq, db: Session = Depen
     db.commit()
 
     def run():
+        from app.services.pipeline import PipelinePaused
         try:
             pipeline.start_generation(project_id, scene_ids=req.scene_ids,
-                                      width=req.width, height=req.height, batch=req.batch)
+                                      width=req.width, height=req.height, batch=req.batch,
+                                      upscale_inline=req.upscale_inline)
+        except PipelinePaused:
+            logger.info(f"Generation paused for project {project_id}")
         except Exception as e:
             logger.error(f"Generation failed: {e}", exc_info=True)
 
@@ -524,23 +623,202 @@ def generate_tts(project_id: str, db: Session = Depends(get_db)):
     return {"status": "started", "message": "TTS generation started"}
 
 
+# project ids with a music job currently running (drives the wizard spinner)
+_music_jobs: set = set()
+# project id → {"total": N, "baseline": tracks before batch} for audition progress
+_music_batches: dict = {}
+
+
 @app.post("/api/projects/{project_id}/generate-music")
-def generate_music(project_id: str, db: Session = Depends(get_db)):
-    """Phase 5: Generate background music via ACE-Step."""
+def generate_music(project_id: str, req: Optional[MusicGenReq] = None, db: Session = Depends(get_db)):
+    """Phase 5 / wizard step 2: generate the music track.
+    Optional body overrides engine/style/lyrics/vocals for this run."""
     project = db.query(Project).get(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    if project_id in _music_jobs:
+        return {"status": "already_running", "message": "Music generation already in progress"}
+
+    r = req or MusicGenReq()
+    # Persist the creative choices so full-auto / resume uses the same sound
+    if r.style:
+        project.music_style = r.style
+    if r.engine:
+        project.music_model = r.engine
+    if r.lyrics is not None and r.lyrics.strip():
+        project.lyrics = r.lyrics
+    db.commit()
+
+    _music_jobs.add(project_id)
 
     def run():
         try:
-            pipeline.generate_music(project_id)
+            pipeline.generate_music(
+                project_id,
+                style=r.style, lyrics=r.lyrics,
+                engine=r.engine, vocals=r.vocals,
+            )
         except Exception as e:
             logger.error(f"Music generation failed: {e}", exc_info=True)
+        finally:
+            _music_jobs.discard(project_id)
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
 
     return {"status": "started", "message": "Music generation started"}
+
+
+@app.post("/api/projects/{project_id}/generate-music-variants")
+def generate_music_variants(project_id: str, req: Optional[MusicVariantsReq] = None, db: Session = Depends(get_db)):
+    """Song audition round: generate N versions of the song (same lyrics,
+    tweaked styles). None becomes active until POST select-music/{track_id}."""
+    from app.database import MusicTrack
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if project_id in _music_jobs:
+        return {"status": "already_running", "message": "Music generation already in progress"}
+
+    r = req or MusicVariantsReq()
+    # Persist the creative choices so resume / full-auto uses the same sound
+    if r.style:
+        project.music_style = r.style
+    if r.engine:
+        project.music_model = r.engine
+    if r.lyrics is not None and r.lyrics.strip():
+        project.lyrics = r.lyrics
+    db.commit()
+
+    current_count = db.query(MusicTrack).filter(MusicTrack.project_id == project_id).count()
+    count = max(1, min(r.count, 10))
+    offset = 0
+    if r.resume:
+        # continue where the paused/incomplete batch stopped — never repeat a style
+        prev = _music_batches.get(project_id)
+        if prev:
+            done = max(0, current_count - prev["baseline"])
+            offset = prev.get("offset", 0) + done
+            count = max(1, prev["total"] - done)
+    _music_batches[project_id] = {"total": count, "baseline": current_count, "offset": offset}
+    _music_jobs.add(project_id)
+
+    def run():
+        try:
+            pipeline.generate_music_variants(
+                project_id, count=count, offset=offset,
+                style=r.style, lyrics=r.lyrics,
+                engine=r.engine, vocals=r.vocals,
+            )
+        except Exception as e:
+            logger.error(f"Music variants generation failed: {e}", exc_info=True)
+        finally:
+            _music_jobs.discard(project_id)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    return {"status": "started", "count": count, "offset": offset}
+
+
+@app.post("/api/projects/{project_id}/pause")
+def pause_pipeline(project_id: str):
+    """Gracefully pause the running pipeline after the current item (scene /
+    song version). Everything finished is kept; the project stays resumable —
+    the same step button (or /resume) continues where it stopped."""
+    pipeline.request_pause()
+    return {"status": "pausing", "message": "Pausing after the current item finishes"}
+
+
+@app.post("/api/projects/{project_id}/cancel")
+def cancel_pipeline(project_id: str):
+    """Hard-stop the running pipeline (marks the project failed — it can still
+    be resumed later, but pause is the friendlier option)."""
+    pipeline.cancel()
+    return {"status": "cancelling", "message": "Stopping the pipeline"}
+
+
+@app.post("/api/projects/{project_id}/select-music/{track_id}")
+def select_music(project_id: str, track_id: str, db: Session = Depends(get_db)):
+    """Pick the winning song version — it becomes the project's music track
+    (the final render always uses the active track)."""
+    from app.database import MusicTrack
+    track = db.query(MusicTrack).filter(
+        MusicTrack.id == track_id,
+        MusicTrack.project_id == project_id,
+    ).first()
+    if not track:
+        raise HTTPException(404, "Music track not found")
+    db.query(MusicTrack).filter(
+        MusicTrack.project_id == project_id,
+        MusicTrack.is_active == True,
+    ).update({"is_active": False})
+    track.is_active = True
+    db.commit()
+    return {"status": "ok", "selected": track_id}
+
+
+@app.post("/api/projects/{project_id}/scenes-from-lyrics")
+def scenes_from_lyrics(project_id: str, req: Optional[ScenesFromLyricsReq] = None, db: Session = Depends(get_db)):
+    """Wizard step 3 (fast path): build beat-synced scenes from the project lyrics — no LLM."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    try:
+        n = pipeline.generate_scenes_from_lyrics(
+            project_id, num_clips=(req.num_clips if req else None))
+        return {"status": "ok", "scene_count": n}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/projects/{project_id}/scenes-manual")
+def scenes_manual(project_id: str, req: ManualScenesReq, db: Session = Depends(get_db)):
+    """Wizard step 3: Manually add scenes from a list of prompts."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    from app.database import Scene, SceneType, SceneStatus
+    current_count = db.query(Scene).filter(Scene.project_id == project_id).count()
+
+    new_scenes = []
+    for i, p in enumerate(req.prompts):
+        if not p.strip(): continue
+        scene = Scene(
+            project_id=project_id,
+            scene_number=current_count + i + 1,
+            scene_type=SceneType.TXT2VID,
+            prompt=p.strip(),
+            duration=4.0,
+            status=SceneStatus.PENDING,
+        )
+        db.add(scene)
+        new_scenes.append(scene)
+    
+    db.commit()
+    return {"status": "ok", "scene_count": current_count + len(new_scenes), "added": len(new_scenes)}
+
+
+@app.post("/api/projects/{project_id}/resume")
+def resume_project(project_id: str, db: Session = Depends(get_db)):
+    """Resume an interrupted/failed project from wherever it stopped.
+    Finished scenes, upscales and the music track are all reused — only the
+    missing pieces are generated."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if project.status in (ProjectStatus.GENERATING, ProjectStatus.UPSCALING, ProjectStatus.ASSEMBLING):
+        raise HTTPException(409, "Pipeline already running for this project")
+
+    def run():
+        try:
+            pipeline.run_full_auto(project_id)
+        except Exception as e:
+            logger.error(f"Resume failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "resumed", "message": "Continuing from the last completed step"}
 
 
 @app.post("/api/projects/{project_id}/full-auto")
@@ -770,13 +1048,80 @@ def available_loras():
 @app.get("/api/system/engine-status")
 def engine_status():
     """Check ComfyUI engine availability (replaces old LTX subprocess check)."""
-    from app.services.comfyui_client import ComfyUIClient
+    from app.services.comfyui_client import ComfyUIClient, is_starting
     client = ComfyUIClient()
     running = client.ping()
     return {
         "running": running,
+        "starting": (not running) and is_starting(),
         "engine": "ComfyUI API",
         "url": "http://127.0.0.1:8188",
+    }
+
+
+@app.post("/api/system/engine-start")
+def engine_start():
+    """Launch the ComfyUI engine if it isn't running (auto-launch also happens
+    lazily whenever the pipeline needs it — this is the manual button)."""
+    from app.services.comfyui_client import ComfyUIClient, is_starting
+    client = ComfyUIClient()
+    if client.ping():
+        return {"status": "running"}
+    if not client.ensure_running():
+        raise HTTPException(500, "ComfyUI portable install not found — check the path in comfyui_client.py")
+    return {"status": "starting" if is_starting() else "running"}
+
+
+@app.get("/api/system/preflight")
+def system_preflight():
+    """Full automation-readiness check: engines, models, ffmpeg, disk, LLM."""
+    from app.services.qa import preflight
+    return preflight(settings).to_dict()
+
+
+# ── Automation ─────────────────────────────────────────────────────────────
+
+@app.post("/api/automation/produce")
+def automation_produce(req: ProduceReq, db: Session = Depends(get_db)):
+    """One-call hands-off production: preflight-gate, create the project, and
+    run the full pipeline (script → scenes → clips → upscale → music → render)
+    in the background. Poll GET /api/projects/{id} for status."""
+    from app.services.qa import preflight
+    report = preflight(settings)
+    if not report.ok:
+        raise HTTPException(503, f"Preflight failed: {report.summary()}")
+
+    channel = db.query(Channel).filter(Channel.slug == req.channel_slug).first()
+    if not channel:
+        raise HTTPException(404, f"Channel '{req.channel_slug}' not found")
+
+    project = Project(
+        title=req.title,
+        channel_id=channel.id,
+        duration_target=req.duration,
+        context=req.context,
+        num_scenes_target=req.num_scenes,
+        video_model=req.video_model or "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf",
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    project_id = project.id
+
+    def run():
+        try:
+            pipeline.run_full_auto(project_id)
+        except Exception as e:
+            logger.error(f"Automation produce failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+
+    return {
+        "id": project_id,
+        "title": project.title,
+        "status": "started",
+        "preflight": report.to_dict(),
+        "poll": f"/api/projects/{project_id}",
     }
 
 

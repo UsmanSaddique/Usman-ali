@@ -30,6 +30,55 @@ class ImageGenService:
         self.manager = model_manager
         self.config = config
 
+    def _generate_comfyui_zimage(
+        self, prompt, width, height, seed, output_path, steps=None,
+    ) -> ImageResult:
+        """Generate a still via Z-Image-Turbo through ComfyUI. Primary engine:
+        far better character fidelity than SDXL+LoRAs (correct clothing, consistent
+        faces) at 8-9 steps, cfg 1, and needs no negative prompt or style LoRA."""
+        from pathlib import Path as _P
+        from app.services.comfyui_client import ComfyUIClient, build_zimage_workflow
+
+        client = ComfyUIClient()
+        if not client.wait_ready(30):
+            raise RuntimeError("ComfyUI not reachable for Z-Image")
+        self.manager.unload()
+
+        ic = self.config.image
+        # Render near Z-Image's native ~1MP budget preserving aspect; the video
+        # stage downsizes the bigger still (supersampling = cleaner frames).
+        gen_w, gen_h = width, height
+        min_h = getattr(ic, "zimage_min_height", 0) or 0
+        if min_h and height < min_h:
+            aspect = width / height
+            gen_h = int(round(min_h / 16) * 16)
+            gen_w = int(round((gen_h * aspect) / 16) * 16)
+            logger.info(f"[ImageGen] still upsized {width}x{height} -> {gen_w}x{gen_h} for Z-Image quality")
+
+        wf = build_zimage_workflow(
+            prompt=prompt,
+            width=gen_w,
+            height=gen_h,
+            steps=steps or int(getattr(ic, "zimage_steps", 9)),
+            cfg=1.0,
+            seed=seed,
+            shift=float(getattr(ic, "zimage_shift", 3.0)),
+        )
+        if not output_path:
+            output_path = str(self.config.paths.assets_dir / "images" / f"img_{seed}.png")
+        _P(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        t0 = time.time()
+        prompt_id = client.submit(wf)
+        history = client.wait_for_completion(prompt_id, timeout=600, poll=1.5)
+        final = client.collect_output(history, output_path)
+        elapsed = time.time() - t0
+        logger.info(f"[ImageGen] Z-Image {gen_w}x{gen_h} in {elapsed:.1f}s -> {final}")
+        return ImageResult(
+            path=final, width=gen_w, height=gen_h, seed=seed,
+            generation_time=elapsed, prompt_used=prompt,
+        )
+
     def _generate_comfyui(
         self, prompt, negative_prompt, width, height, steps, cfg_scale, seed, output_path,
     ) -> ImageResult:
@@ -115,7 +164,17 @@ class ImageGenService:
         if seed == -1:
             seed = torch.randint(0, 2**32 - 1, (1,)).item()
 
-        # Preferred: generate via ComfyUI SDXL (same backend as video/music).
+        # Preferred: Z-Image-Turbo via ComfyUI (engine="zimage" in config).
+        if getattr(self.config.image, "engine", "sdxl") == "zimage":
+            try:
+                return self._generate_comfyui_zimage(
+                    prompt=prompt, width=width, height=height,
+                    seed=seed, output_path=output_path,
+                )
+            except Exception as e:
+                logger.warning(f"[ImageGen] Z-Image failed ({e}); falling back to SDXL")
+
+        # SDXL via ComfyUI (same backend as video/music).
         # The diffusers path breaks on transformers 5.9 ('CLIPTextModel' has no
         # attribute 'text_model'), so ComfyUI is the reliable route.
         try:

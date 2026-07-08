@@ -1,0 +1,69 @@
+##
+## Cinematography Guide for AI Video Director
+## This file is loaded by the director service to inform shot selection,
+## framing, and visual storytelling decisions.
+##
+
+shot_types:
+  wide_establishing:
+    keywords: "wide establishing shot, full body, environment visible"
+    use_for: "opening scenes, location reveals, showing scale, two+ characters in environment"
+    ai_benefit: "forces model to render full scene with context, avoids zoomed-in face artifacts"
+    frequency: "30-40% of scenes"
+
+  medium_wide:
+    keywords: "medium wide shot, full body visible, head to toe"
+    use_for: "action beats, walking, characters interacting, showing body language"
+    ai_benefit: "good balance of character detail and scene context"
+    frequency: "20-30% of scenes"
+
+  medium:
+    keywords: "medium shot, waist up, upper body"
+    use_for: "dialogue, gentle emotion, character doing something with hands"
+    ai_benefit: "enough face detail without triggering close-up artifacts"
+    frequency: "20-25% of scenes"
+
+  medium_closeup:
+    keywords: "medium close-up, chest up"
+    use_for: "emotional reactions, tender moments, revealing an object being held"
+    ai_benefit: "shows emotion while keeping enough context"
+    frequency: "10-15% of scenes"
+
+  closeup:
+    keywords: "close-up"
+    use_for: "single powerful emotional beat — a tear, a gasp, holding something precious"
+    ai_benefit: "RISKY on AI models — faces often distort. Use only when story demands it"
+    frequency: "5-10% of scenes, NEVER consecutive, NEVER the default"
+
+sequencing_rules:
+  - "NEVER repeat the same shot type in consecutive scenes"
+  - "Open with wide/establishing, end with wide/establishing (bookend structure)"
+  - "Emotional climax gets the tightest shot in the sequence"
+  - "After a close-up, always pull back to medium-wide or wider"
+  - "Action scenes prefer medium-wide; quiet scenes can use medium"
+
+prompt_structure:
+  order: "shot type → character descriptors → action → environment → lighting → art style → quality boosters"
+  example: "medium wide shot, full body, [CHARACTER] doing [ACTION] in [ENVIRONMENT], [LIGHTING], [ART STYLE]"
+
+quality_boosters:
+  always_include: "highly detailed, cinematic composition, soft volumetric lighting, depth of field"
+  negative_always: "extreme close-up, macro, face only, head only, cropped frame, zoomed in, blurry, low quality"
+
+ltx_video_loras:
+  recommended_defaults:
+    - name: "ltx-2.3-22b-ic-lora-hdr-0.9.safetensors"
+      weight: 0.6
+      purpose: "HDR-style lighting — richer contrast, more dynamic range, punchier colors"
+      vram_cost: "312MB — fits on 16GB with the 22B GGUF model"
+  too_large_for_16gb:
+    - name: "LTX2.3_Crisp_Enhance.safetensors"
+      weight: 0.5
+      purpose: "sharper detail, reduced softness/blur, cleaner edges on characters"
+      vram_cost: "672MB — causes severe CPU offload on 16GB GPU (6x slowdown). Only use on 24GB+ GPUs."
+  optional:
+    - name: "LTX2.3_CameraControls.safetensors"
+      weight: 0.6
+      purpose: "smoother, more deliberate camera movements"
+      vram_cost: "322MB — fits on 16GB but tight with HDR already loaded. Use one or the other."
+  vram_budget_note: "On 16GB VRAM, the 22B GGUF model uses ~14GB. Only ~1.5GB left for LoRAs. Use at most ONE 300MB LoRA."

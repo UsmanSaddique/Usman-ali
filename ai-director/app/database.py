@@ -103,6 +103,10 @@ class Project(Base):
     channel_id = Column(String, ForeignKey("channels.id"), nullable=False)
     duration_target = Column(Integer, nullable=False)  # seconds
     context = Column(Text)              # user-provided context/notes
+    lyrics = Column(Text)               # song lyrics — drive music vocals + scene timing
+    music_style = Column(Text)          # style tags for the music engine
+    music_model = Column(String, default="auto")   # auto|sft|turbo|heartmula|ace1
+    upscale_inline = Column(Boolean, default=True)  # upscale each clip right after generation
     num_scenes_target = Column(Integer, nullable=True) # user-customized target scene count
     video_model = Column(String, default="LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf")
     default_lora_ids = Column(JSON, default=list)      # ["lora_file.safetensors", ...]
@@ -263,6 +267,10 @@ def _migrate(engine):
             ("projects", "video_model", "VARCHAR", "'LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf'"),
             ("projects", "default_lora_ids", "JSON", "'[]'"),
             ("projects", "default_lora_weights", "JSON", "'[]'"),
+            ("projects", "lyrics", "TEXT", "NULL"),
+            ("projects", "music_style", "TEXT", "NULL"),
+            ("projects", "music_model", "VARCHAR", "'auto'"),
+            ("projects", "upscale_inline", "BOOLEAN", "1"),
             ("scenes", "video_model", "VARCHAR", "NULL"),
         ]:
             try:

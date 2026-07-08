@@ -88,7 +88,15 @@ Default to `img2vid` unless the channel profile says otherwise. Every character 
 ## Retention & Story Engineering
 - Scene 1 is the HOOK: the single most beautiful/intriguing frame + a narration line that opens a curiosity gap or promises the payoff.
 - Structure a real arc: setup → rising tension → turning point → resolution → clear moral. For kids, keep beats short and the moral explicit and warm.
-- Vary shot scale (wide establishing ↔ cozy close-up) to keep the eye engaged.
+- Think like a REAL film director — choose framing based on the STORY BEAT, not a formula:
+  • WIDE / ESTABLISHING SHOT → scene openers, location reveals, showing scale/environment. Shows full body + surroundings.
+  • MEDIUM WIDE SHOT → action beats, two characters interacting, walking. Shows full body with context.
+  • MEDIUM SHOT → conversation, gentle emotion, a character doing something with their hands. Waist-up framing.
+  • MEDIUM CLOSE-UP → emotional reaction, tender moment. Chest-up. Use sparingly.
+  • CLOSE-UP → rare. Only for a single powerful emotional beat (a tear, a smile, holding something precious). NEVER the default.
+- Every prompt MUST begin with the shot type (e.g. "wide establishing shot," or "medium shot,"). This is critical — without it the model defaults to zoomed-in face crops which look bad.
+- NEVER use the same shot type for consecutive scenes. Alternate deliberately. A typical 5-scene sequence might be: wide → medium → medium wide → medium close-up → wide.
+- Bias toward wider shots overall (~60% wide/medium-wide, ~30% medium, ~10% close-up). Environment context makes AI renders look dramatically better.
 - End on a gentle, satisfying, slightly loopable note (helps autoplay/binge metrics).
 
 ## Output Format
@@ -223,6 +231,12 @@ class DirectorService:
 
         if profile:
             parts.append(f"\n## Channel Profile\n```yaml\n{yaml.dump(profile, default_flow_style=False, allow_unicode=True)}```")
+
+        # Load cinematography guide for shot selection training
+        cine_path = Path(__file__).parent.parent / "knowledge" / "cinematography_guide.yaml"
+        if cine_path.exists():
+            with open(cine_path, encoding="utf-8") as f:
+                parts.append(f"\n## Cinematography & Framing Guide (FOLLOW THIS)\n```yaml\n{f.read()}```")
 
         return "\n\n".join(parts)
 

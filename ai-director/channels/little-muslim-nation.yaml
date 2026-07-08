@@ -29,7 +29,8 @@ visual_style:
   - "Charming wholesome settings: sunny pastel old-town streets, gardens, cozy homes, mosque domes softly in the background"
   - "Warm cinematic daylight, soft depth of field, bokeh background, beautifully rendered"
   - "Repeat the art_style_phrase and each character's EXACT descriptors in EVERY prompt they appear in"
-negative_prompt_additions: "photorealistic, realistic skin, real human photo, uncanny, text, watermark, scary, dark, harsh lighting, deformed, extra limbs, extra fingers, blurry, low quality, immodest clothing"
+negative_prompt_additions: "photorealistic, realistic skin, real human photo, uncanny, text, watermark, scary, dark, harsh lighting, deformed, extra limbs, extra fingers, blurry, low quality, immodest clothing, extreme close-up, macro, face only, head only, cropped frame"
+framing_directive: "Default to WIDE SHOTS and MEDIUM-WIDE SHOTS showing full body + environment. Only use close-ups when a scene explicitly calls for emotion. Every prompt MUST include one of: 'wide shot', 'full body shot', 'medium wide shot' — this prevents the zoomed-in face problem."
 still_ratio: 0.0   # every scene is a real animated video clip (img2vid), not a static still
 scene_type_directive: "Use scene_type 'img2vid' for EVERY scene: a consistent SDXL still then ANIMATED by LTX (real motion, not a static Ken Burns pan). Each prompt MUST describe the character DOING a gentle action + ambient motion."
 
