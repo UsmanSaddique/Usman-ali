@@ -518,7 +518,9 @@ Respond with ONLY JSON:
         for s in scene_list:
             scenes.append(ScenePlan(
                 scene_number=s.get("scene_number", len(scenes) + 1),
-                scene_type=s.get("scene_type", "txt2vid"),
+                # img2vid is the app default: Z-Image still + LTX animation gives
+                # far better character consistency than pure txt2vid.
+                scene_type=s.get("scene_type", "img2vid"),
                 prompt=s.get("prompt", ""),
                 negative_prompt=s.get("negative_prompt", ""),
                 duration=float(s.get("duration", 5.0)),

@@ -746,21 +746,43 @@ tr { cursor: pointer; }
       <div class="card hidden" id="wiz-s4">
         <h3 class="flex-between"><span>4 · Clips — generate one by one, upscaled as they finish</span>
           <button class="btn-outline btn-sm" onclick="wizCopyPrompt(4, this)" title="Copy a prompt that helps an AI fix/rewrite a scene prompt for a clip that came out wrong">📋 Copy AI prompt</button></h3>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Video Model</label>
-            <select id="wiz-video-model"></select>
-          </div>
-          <div class="form-group">
-            <label class="flex items-center gap-2" style="cursor:pointer;margin-top:22px">
-              <input type="checkbox" id="wiz-upscale-inline" checked style="width:auto">
-              <span>Upscale each clip to 1080p right after it generates</span>
-            </label>
+        <div class="form-grid" style="grid-template-columns: 1fr;">
+          <div class="form-group" style="padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;">
+            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+              <label class="flex items-center gap-2" style="cursor:pointer; margin-bottom: 0;">
+                <input type="checkbox" id="wiz-clips-select-all" onclick="wizToggleSelectAll(this.checked)" style="width:auto">
+                <span style="font-weight:600">Select All</span>
+              </label>
+              
+              <div style="border-left: 1px solid var(--border); height: 24px; margin: 0 4px;"></div>
+              
+              <select id="wiz-bulk-profile" style="width:140px; padding:4px 8px; font-size:.8rem;">
+                <option value="img2vid">Image to Video</option>
+                <option value="txt2vid">Text to Video</option>
+                <option value="still_pan">Still Pan</option>
+              </select>
+              
+              <div style="flex:1"></div>
+              
+              <button class="btn-primary btn-sm" onclick="wizBulkAction('gen')">▶ Gen</button>
+              <button class="btn-generate btn-sm" onclick="wizBulkAction('gen_optimized')">▶ Gen (Optimized)</button>
+              <button class="btn-outline btn-sm" onclick="wizBulkAction('gen_upscale')">▶ Gen + Upscale</button>
+              <button class="btn-outline btn-sm" onclick="wizBulkAction('upscale')" style="color:var(--accent2);border-color:var(--accent2)">✨ Upscale</button>
+            </div>
           </div>
         </div>
-        <div class="btn-group mt-8">
-          <button class="btn-generate" id="wiz-clips-all-btn" onclick="wizGenClips(null)"><span class="btn-icon">▶</span> Generate All (one by one)</button>
-          <button class="btn-danger btn-sm hidden" id="wiz-clips-pause" onclick="wizPause(this)">⏸ Pause</button>
+        <div class="btn-group mt-8" style="justify-content: space-between;">
+          <div style="display: flex; gap: 12px; align-items: center;">
+            <select id="wiz-video-model" style="width:140px; padding:4px 8px; font-size:.8rem;"></select>
+            <label class="flex items-center gap-2" style="cursor:pointer; margin-bottom: 0; font-size: .8rem;">
+              <input type="checkbox" id="wiz-upscale-inline" checked style="width:auto">
+              <span>Upscale (single-gen)</span>
+            </label>
+          </div>
+          <div>
+            <button class="btn-outline btn-sm" id="wiz-clips-all-btn" onclick="wizGenClips(null)"><span class="btn-icon">▶</span> Generate All Missing</button>
+            <button class="btn-danger btn-sm hidden" id="wiz-clips-pause" onclick="wizPause(this)">⏸ Pause</button>
+          </div>
         </div>
         <div id="wiz-clips-list" class="mt-8"></div>
         <div class="btn-group mt-16 hidden" id="wiz-clips-next">
@@ -787,6 +809,15 @@ tr { cursor: pointer; }
           <div class="btn-group mt-8">
             <a id="wiz-final-download" class="btn-success" href="#" download>⬇ Download MP4</a>
             <button class="btn-outline" onclick="showPage('dashboard')">Back to Dashboard</button>
+          </div>
+          <div class="mt-16">
+            <div style="font-weight:600;font-size:.85rem;margin-bottom:4px">📋 Video context for AI — copy &amp; paste into ChatGPT/Claude for a master title + description</div>
+            <p class="text-dim text-sm" style="margin-bottom:6px">Contains your notes, the full lyrics and the scene-by-scene visual story, plus ready instructions for the AI.</p>
+            <textarea id="wiz-yt-context" rows="10" readonly
+              style="width:100%;font-size:.75rem;font-family:monospace" placeholder="Loading video context…"></textarea>
+            <div class="btn-group mt-8">
+              <button class="btn-primary btn-sm" onclick="wizCopyYtContext(this)">📋 Copy context</button>
+            </div>
           </div>
         </div>
         <div class="btn-group mt-16">
@@ -1071,8 +1102,8 @@ tr { cursor: pointer; }
       <div class="form-group">
         <label>Scene Type</label>
         <select id="modal-type">
-          <option value="txt2vid">txt2vid (AI motion)</option>
           <option value="img2vid">img2vid (image→video)</option>
+          <option value="txt2vid">txt2vid (AI motion)</option>
           <option value="still_pan">still_pan (Ken Burns)</option>
         </select>
       </div>
@@ -1161,6 +1192,7 @@ function renderProjectSilent() {
       break;
     case 'rendered':
       btns = `<a class="btn-success" href="/projects/${p.id}/final_render.mp4" download>⬇ Download MP4</a>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
     case 'failed':
@@ -1170,6 +1202,7 @@ function renderProjectSilent() {
       break;
     default:
       btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume</button>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
   }
   actions.innerHTML = btns;
@@ -1346,7 +1379,8 @@ function renderProject() {
               <button class="btn-outline" onclick="pipelineAction('generate-script')">Regenerate</button>`;
       break;
     case 'approved':
-      btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Start Generation</button>
+      btns = `<button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
+              <button class="btn-primary" onclick="pipelineAction('start-generation')">Start Generation</button>
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
       break;
     case 'generating': case 'upscaling': case 'assembling': case 'music': case 'scripting':
@@ -1361,6 +1395,7 @@ function renderProject() {
       break;
     case 'rendered':
       btns = `<a class="btn-success" href="/projects/${p.id}/final_render.mp4" download>⬇ Download MP4</a>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
     case 'failed':
@@ -1370,6 +1405,7 @@ function renderProject() {
       break;
     default:
       btns = `<button class="btn-primary" onclick="pipelineAction('start-generation')">Resume</button>
+              <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-warning" onclick="pipelineAction('full-auto')">Full Auto</button>`;
   }
   actions.innerHTML = btns;
@@ -1421,6 +1457,8 @@ function renderProject() {
         <div class="btn-group">
           <button class="btn-outline btn-sm" onclick="event.stopPropagation(); editScene('${s.id}', ${s.scene_number})">Edit</button>
           <button class="btn-outline btn-sm" onclick="event.stopPropagation(); retryScene('${s.id}')">↻ Retry</button>
+          ${(s.status === 'approved' || s.status === 'generated') ? 
+            (!s.upscaled ? `<button class="btn-outline btn-sm" style="color:var(--accent2);border-color:var(--accent2)" onclick="event.stopPropagation(); upscaleScene('${s.id}')">✨ Upscale</button>` : `<span class="badge badge-rendered" style="align-self:center">HD</span>`) : ''}
         </div>
       </div>
       <div class="scene-prompt">${esc(s.prompt)}</div>
@@ -1441,6 +1479,13 @@ async function pipelineAction(action) {
   try {
     await api(`/api/projects/${currentProject.id}/${action}`, 'POST');
     // Refresh after a moment
+    setTimeout(() => openProject(currentProject.id), 1000);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function upscaleScene(sceneId) {
+  try {
+    await api(`/api/scenes/${sceneId}/upscale`, 'POST');
     setTimeout(() => openProject(currentProject.id), 1000);
   } catch(e) { alert('Error: ' + e.message); }
 }
@@ -2146,7 +2191,7 @@ Give me ALL of the following, clearly numbered:
    - A line fully in (parentheses) = instrumental break, e.g. (playful instrumental)
    - NO timestamps, NO other markup, NO text before the first tag
 
-3) NUMBER OF CLIPS — I plan ${clips} visual clips (~${perClip}s each) for ${duration}s. Confirm or suggest better.
+3) NUMBER OF CLIPS — my clips render at most 4 seconds each and crossfades overlap 0.5s, so a ${duration}s video needs AT LEAST ${Math.ceil((duration - 0.5) / 3.5)} clips. I currently plan ${clips} (~${perClip}s each). Confirm the right count for ${duration}s.
 
 4) CREATIVE NOTES — 2–3 sentences for the video: theme, main characters, mood, settings.`;
 
@@ -2224,6 +2269,22 @@ Give me:
 3) 15 comma-separated tags
 4) 5 hashtags
 Match the language of the lyrics (translate the description if the song is in Urdu, and add an English summary line).`;
+}
+
+async function wizCopyYtContext(btn) {
+  const ta = document.getElementById('wiz-yt-context');
+  if (!ta || !ta.value) { alert('Context not loaded yet — try again in a second.'); return; }
+  try {
+    await navigator.clipboard.writeText(ta.value);
+  } catch(e) {
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); } catch(e2) {}
+  }
+  if (btn) {
+    const old = btn.textContent;
+    btn.textContent = '✓ Copied — paste into ChatGPT/Claude';
+    setTimeout(() => { btn.textContent = old; }, 2500);
+  }
 }
 
 async function wizCopyPrompt(step, btn) {
@@ -2404,10 +2465,15 @@ async function wizSubmitPaste() {
   }
   document.getElementById('wiz-scenes-status').innerHTML = '<span class="wiz-spin">⚙</span> Adding scenes...';
   try {
-    await api(`/api/projects/${wiz.id}/scenes-manual`, 'POST', { prompts });
+    const res = await api(`/api/projects/${wiz.id}/scenes-manual`, 'POST', { prompts });
     document.getElementById('wiz-paste-prompts').value = '';
     document.getElementById('wiz-scenes-paste-area').classList.add('hidden');
     await wizRefresh();
+    if (res.warning) {
+      document.getElementById('wiz-scenes-status').innerHTML =
+        `<span style="color:var(--warning,#e2b93b)">⚠ ${esc(res.warning)}</span>`;
+      alert('⚠ Video length warning:\n\n' + res.warning);
+    }
   } catch(e) { 
     document.getElementById('wiz-scenes-status').textContent = 'Error: ' + e.message; 
   }
@@ -2438,13 +2504,22 @@ function wizRenderScenes(p) {
         <textarea data-scene="${s.id}" class="wiz-prompt" rows="2"
           style="width:100%;font-size:.78rem"
           onchange="wizSaveScene('${s.id}', this.value)">${esc(s.prompt)}</textarea>
-        <span class="text-dim" style="font-size:.72rem">${s.scene_type} · ${s.duration}s · ${s.camera_motion || 'static'}</span>
+        <select style="font-size:.72rem; padding: 2px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" onchange="wizSaveSceneType('${s.id}', this.value)">
+          <option value="img2vid" ${s.scene_type==='img2vid'?'selected':''}>Image to Video</option>
+          <option value="txt2vid" ${s.scene_type==='txt2vid'?'selected':''}>Text to Video</option>
+          <option value="still_pan" ${s.scene_type==='still_pan'?'selected':''}>Still Pan</option>
+        </select>
+        <span class="text-dim" style="font-size:.72rem"> · ${s.duration}s · ${s.camera_motion || 'static'}</span>
       </div>
     </div>`).join('');
 }
 
 async function wizSaveScene(id, prompt) {
   try { await api(`/api/scenes/${id}`, 'PUT', { prompt }); } catch(e) { alert('Save failed: ' + e.message); }
+}
+
+async function wizSaveSceneType(id, scene_type) {
+  try { await api(`/api/scenes/${id}`, 'PUT', { scene_type }); } catch(e) { alert('Save failed: ' + e.message); }
 }
 
 // ── Step 4: Clips ──
@@ -2468,6 +2543,22 @@ async function wizGenClips(sceneId) {
   } catch(e) { alert('Error: ' + e.message); }
 }
 
+async function wizRegenImage(sceneId) {
+  if (!wiz.id) return;
+  const s = ((wiz.project || {}).scenes || []).find(x => x.id === sceneId);
+  const edited = prompt(
+    'Image prompt — edit anything you want changed, then OK.\n' +
+    'A fresh image is generated (new random look) and the next "Redo Video" will animate it.',
+    s ? s.prompt : ''
+  );
+  if (edited === null) return; // cancelled
+  try {
+    await api(`/api/scenes/${sceneId}/regen-image`, 'POST', { prompt: edited });
+    wizStartPoll();
+    wizRefresh();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
 function _fmtTime(ms) {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
@@ -2485,6 +2576,12 @@ function wizRenderClips() {
   const clipsPause = document.getElementById('wiz-clips-pause');
   clipsPause.classList.toggle('hidden', !running);
   if (!running) { clipsPause.disabled = false; clipsPause.textContent = '⏸ Pause'; }
+
+  // Disable bulk buttons while running
+  document.querySelectorAll('#wiz-s4 .btn-primary, #wiz-s4 .btn-generate, #wiz-s4 button[onclick^="wizBulkAction"]').forEach(btn => {
+    btn.disabled = running;
+  });
+
   const todo = p.scenes.filter(s => !['generated','approved'].includes(s.status)).length;
   const done = p.scenes.length - todo;
   allBtn.innerHTML = (!running && todo > 0 && done > 0)
@@ -2513,11 +2610,27 @@ function wizRenderClips() {
   const chips = { pending:'#555', queued:'#555', generating:'var(--warning, #e2b93b)', generated:'var(--success, #3ecf8e)', approved:'var(--success, #3ecf8e)', failed:'var(--danger, #ff5470)' };
   const currentScene = prog ? prog.current_scene : null;
 
+  // Preserve checkbox state
+  const checkedIds = new Set(Array.from(document.querySelectorAll('.wiz-clip-select:checked')).map(cb => cb.value));
+
   const cardsHtml = p.scenes.map(s => {
     const clipUrl = s.clip_url ? s.clip_url + '?t=' + (s.retry_count||0) : null;
+    // preload="none" + poster: don't allocate a GPU video decoder for every
+    // card — ~35 videos re-created on each 4s poll was stealing VRAM from
+    // the render and causing random slow clips. Decode only on hover.
     const media = clipUrl
-      ? `<video src="${clipUrl}" muted loop onmouseover="this.play()" onmouseout="this.pause()"></video>`
+      ? `<video src="${clipUrl}" preload="none" ${s.thumb_url ? `poster="${s.thumb_url}"` : ''} muted loop onmouseover="this.play()" onmouseout="this.pause()"></video>`
       : (s.thumb_url ? `<img src="${s.thumb_url}">` : `<img>`);
+    // Base image preview: when the clip exists, still show the source still
+    // beside it so the user can judge (and regenerate) the image separately.
+    const imgBusy = s.still_regen === 'running';
+    const stillPreview = (clipUrl && s.thumb_url)
+      ? `<img src="${s.thumb_url}" title="Base image for this clip — click to open" onclick="window.open('${s.thumb_url}','_blank')"
+           style="width:86px;height:50px;object-fit:cover;border-radius:4px;border:1px solid var(--border);cursor:zoom-in;margin-left:4px;${imgBusy?'opacity:.4':''}">`
+      : '';
+    const imgChip = imgBusy
+      ? '<span class="wiz-chip" style="background:var(--warning,#e2b93b);color:#000">🖼 new image…</span>'
+      : ((s.still_regen||'').startsWith('failed') ? '<span class="wiz-chip" style="background:var(--danger,#ff5470);color:#fff" title="'+esc(s.still_regen)+'">🖼 image failed</span>' : '');
     const isActive = running && (s.status === 'generating' || s.scene_number === currentScene);
     const spin = isActive ? ' <span class="wiz-spin">⚙</span>' : '';
     const borderStyle = isActive
@@ -2534,25 +2647,100 @@ function wizRenderClips() {
     const genVersions = s.versions || 0;
     const genTime = (s.generation_time && s.generation_time > 0) ? `<span class="text-dim" style="font-size:.72rem;margin-left:6px">took ${Math.round(s.generation_time)}s</span>` : '';
 
-    return `<div class="wiz-clip" style="${borderStyle};transition:border-color .3s,box-shadow .3s">
-      ${media}
+    return `<div class="wiz-clip" style="${borderStyle};transition:border-color .3s,box-shadow .3s; position:relative;">
+      <input type="checkbox" class="wiz-clip-select" value="${s.id}" style="position:absolute; top:8px; left:8px; z-index:10; width:16px; height:16px; cursor:pointer;" onclick="event.stopPropagation()" ${checkedIds.has(s.id) ? 'checked' : ''}>
+      ${media}${stillPreview}
       <div style="flex:1">
         <div style="font-weight:600;font-size:.8rem">
           ${isActive ? '🔥 ' : ''}Clip ${s.scene_number} <span class="text-dim">· ${s.duration}s</span>
           ${timeInfo}${genTime}
         </div>
+        <div style="margin: 4px 0;">
+          <select style="font-size:.72rem; padding: 2px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" onchange="wizSaveSceneType('${s.id}', this.value)" ${running ? 'disabled' : ''}>
+            <option value="img2vid" ${s.scene_type==='img2vid'?'selected':''}>Image to Video</option>
+            <option value="txt2vid" ${s.scene_type==='txt2vid'?'selected':''}>Text to Video</option>
+            <option value="still_pan" ${s.scene_type==='still_pan'?'selected':''}>Still Pan</option>
+          </select>
+        </div>
         <span class="wiz-chip" style="background:${chips[s.status]||'#555'};color:#fff">${isActive ? 'generating' : s.status}${spin}</span>
         ${s.upscaled ? '<span class="wiz-chip" style="background:var(--accent);color:#fff">1080p ✓</span>' : ''}
+        ${imgChip}
       </div>
-      <button class="btn-outline btn-sm" ${running ? 'disabled' : ''}
-        onclick="wizGenClips('${s.id}')">${['generated','approved'].includes(s.status) ? '↻ Redo' : '▶ Generate'}</button>
+      </div>
+      <div class="btn-group" style="flex-direction:column;align-items:stretch;gap:4px">
+        ${s.scene_type === 'img2vid' ? `<button class="btn-outline btn-sm" ${(running || imgBusy) ? 'disabled' : ''} title="Regenerate the base image (edit the prompt, fresh look)"
+          onclick="wizRegenImage('${s.id}')">${imgBusy ? '🖼 …' : '🖼 New Image'}</button>` : ''}
+        <button class="btn-outline btn-sm" ${running ? 'disabled' : ''} title="${s.scene_type === 'img2vid' ? 'Generate the video from the current base image' : 'Generate the clip'}"
+          onclick="wizGenClips('${s.id}')">${['generated','approved'].includes(s.status) ? '🎬 Redo Video' : '▶ Generate'}</button>
+        ${(['generated','approved'].includes(s.status) && !s.upscaled) ? `<button class="btn-outline btn-sm" style="color:var(--accent2);border-color:var(--accent2)" ${running ? 'disabled' : ''} onclick="upscaleScene('${s.id}')">✨ Upscale</button>` : ''}
+      </div>
     </div>`;
   }).join('');
 
   list.innerHTML = summaryHtml + cardsHtml;
+  
+  // Re-check "Select All" if all are checked
+  const checkboxes = document.querySelectorAll('.wiz-clip-select');
+  const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every(c => c.checked);
+  document.getElementById('wiz-clips-select-all').checked = allChecked;
+
   const allDone = p.scenes.length && p.scenes.every(s => ['generated','approved'].includes(s.status));
-  document.getElementById('wiz-clips-next').classList.toggle('hidden', !allDone);
+  const nextBtn = document.getElementById('wiz-clips-next');
+  nextBtn.classList.remove('hidden');
+  nextBtn.querySelector('button').disabled = !allDone;
+  nextBtn.querySelector('button').textContent = allDone ? 'Next Step: Merge Video' : 'Next Step: Merge Video (waiting for clips...)';
 }
+
+function wizToggleSelectAll(checked) {
+  document.querySelectorAll('.wiz-clip-select').forEach(cb => cb.checked = checked);
+}
+
+async function wizBulkAction(action) {
+  if (!wiz.id) return;
+  const checkboxes = document.querySelectorAll('.wiz-clip-select:checked');
+  const sceneIds = Array.from(checkboxes).map(cb => cb.value);
+  
+  if (sceneIds.length === 0) {
+    alert("Please select at least one clip first.");
+    return;
+  }
+
+  const profile = document.getElementById('wiz-bulk-profile').value;
+  const originalHtml = document.getElementById('wiz-s4').querySelector('.btn-group').innerHTML;
+
+  try {
+    // 1. Bulk apply profile
+    for (const sid of sceneIds) {
+      await api(`/api/scenes/${sid}`, 'PUT', { scene_type: profile });
+    }
+    
+    // 2. Execute action
+    // 'gen_optimized' = same batch flow: the backend already pre-generates
+    // ALL stills with one image-model load, then runs videos back-to-back
+    // with the video model resident (no per-scene load/offload thrash).
+    if (action === 'gen' || action === 'gen_upscale' || action === 'gen_optimized') {
+      const upscale = (action === 'gen_upscale');
+      await api(`/api/projects/${wiz.id}/generate-scenes`, 'POST', {
+        scene_ids: sceneIds,
+        video_model: document.getElementById('wiz-video-model').value,
+        width: 832, height: 480,
+        upscale_inline: upscale,
+        batch: true,
+      });
+      wizStartPoll();
+    } else if (action === 'upscale') {
+      // One sequential project-level pass — firing the per-scene endpoint in a
+      // loop spawned N SIMULTANEOUS upscale threads that fought over the GPU
+      // and errored. start-upscale walks all generated clips one by one and
+      // skips clips that are already 1080p.
+      await api(`/api/projects/${wiz.id}/start-upscale`, 'POST');
+      wizStartPoll();
+    }
+  } catch(e) {
+    alert("Error executing bulk action: " + e.message);
+  }
+}
+
 
 // ── Step 5: Merge ──
 async function wizMerge() {
@@ -2630,6 +2818,13 @@ async function wizRefresh() {
   // Step 5: final render
   if (p.status === 'rendered' && p.output_path) {
     document.getElementById('wiz-merge-status').textContent = 'Final video rendered ✓ (QA-checked)';
+    // Fill the copyable AI context once per project
+    if (wiz.ytContextFor !== p.id) {
+      wiz.ytContextFor = p.id;
+      api(`/api/projects/${p.id}/yt-context`)
+        .then(r => { document.getElementById('wiz-yt-context').value = r.text; })
+        .catch(() => { wiz.ytContextFor = null; });
+    }
     document.getElementById('wiz-merge-btn').disabled = false;
     const v = document.getElementById('wiz-final-video');
     const url = `/projects/${p.id}/final_render.mp4?t=${Date.now()}`;

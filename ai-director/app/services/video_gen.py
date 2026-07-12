@@ -58,6 +58,7 @@ class VideoGenService:
         output_path: Optional[str] = None,
         model_filename: Optional[str] = None,
         loras: Optional[list[tuple[str, float]]] = None,
+        clear_vram_first: bool = True,
     ) -> VideoResult:
         return self._generate_comfyui(
             mode="txt2vid",
@@ -73,6 +74,7 @@ class VideoGenService:
             output_path=output_path,
             model_filename=model_filename,
             loras=loras,
+            clear_vram_first=clear_vram_first,
         )
 
     def img2vid(
@@ -90,6 +92,7 @@ class VideoGenService:
         output_path: Optional[str] = None,
         model_filename: Optional[str] = None,
         loras: Optional[list[tuple[str, float]]] = None,
+        clear_vram_first: bool = True,
     ) -> VideoResult:
         return self._generate_comfyui(
             mode="img2vid",
@@ -106,6 +109,7 @@ class VideoGenService:
             model_filename=model_filename,
             loras=loras,
             image_path=image_path,
+            clear_vram_first=clear_vram_first,
         )
 
     def _generate_comfyui(
@@ -124,6 +128,7 @@ class VideoGenService:
         model_filename: Optional[str],
         loras: Optional[list[tuple[str, float]]] = None,
         image_path: Optional[str] = None,
+        clear_vram_first: bool = True,
     ) -> VideoResult:
         # Wait for ComfyUI rather than failing instantly — it may still be
         # reloading its CUDA context after the LLM phase released VRAM.
@@ -135,7 +140,12 @@ class VideoGenService:
         # CRITICAL on 16GB: LTX-22B (~13GB) does not fit alongside a cached SDXL
         # checkpoint (~6.5GB) — it spills to shared RAM and crawls (275s/step).
         # Free ComfyUI's other models first so LTX gets the whole card.
-        self.comfy_client.free_vram()
+        # Double-call with a pause: a single /free sometimes leaves the image
+        # model partially cached. The second call + sleep ensures full eviction.
+        if clear_vram_first:
+            self.comfy_client.free_vram()
+            time.sleep(3)
+            self.comfy_client.free_vram()
 
         if not model_filename:
             model_filename = Path(self.config.video.model_path).name

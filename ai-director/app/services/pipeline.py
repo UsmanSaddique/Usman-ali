@@ -7,10 +7,12 @@ import os
 import time
 import logging
 import asyncio
+import threading
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Callable
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 
 from app.config import Settings
 from app.database import (
@@ -89,6 +91,38 @@ class PipelineOrchestrator:
         self._pause_requested = False
         # QA accumulator — filled across phases, written as qa_report.json at render
         self._qa_notes: dict = {"scenes": []}
+        # Exclusivity: only ONE heavy phase (generation/upscale/render) may run
+        # at a time. Concurrent starts (e.g. bulk-clicking 50 per-scene upscales)
+        # used to spawn parallel threads that fought over the GPU and crashed.
+        # RLock so run_full_auto can call the phase methods it wraps.
+        self._phase_lock = threading.RLock()
+        self._lock_depth = 0
+        self._busy_phase: Optional[str] = None
+
+    @property
+    def busy_phase(self) -> Optional[str]:
+        """Name of the running exclusive phase, or None when idle."""
+        return self._busy_phase
+
+    @contextmanager
+    def _exclusive(self, phase: str):
+        """Guard a heavy phase. Raises PipelineBusy immediately (no blocking)
+        if another thread is mid-phase, instead of letting two GPU pipelines
+        trample each other."""
+        if not self._phase_lock.acquire(blocking=False):
+            raise PipelineBusy(
+                f"Pipeline is busy ({self._busy_phase or 'unknown phase'}) — "
+                f"wait for it to finish or cancel it first")
+        self._lock_depth += 1
+        if self._lock_depth == 1:
+            self._busy_phase = phase
+        try:
+            yield
+        finally:
+            self._lock_depth -= 1
+            if self._lock_depth == 0:
+                self._busy_phase = None
+            self._phase_lock.release()
 
     # ── Progress Management ────────────────────────────────────────────
 
@@ -370,6 +404,12 @@ class PipelineOrchestrator:
     # ── Phase 3: Asset Generation ──────────────────────────────────────
 
     def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None, batch: bool = False, upscale_inline: bool = False):
+        with self._exclusive("generation"):
+            return self._start_generation_impl(
+                project_id, scene_ids=scene_ids, width=width, height=height,
+                batch=batch, upscale_inline=upscale_inline)
+
+    def _start_generation_impl(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None, batch: bool = False, upscale_inline: bool = False):
         """
         Generate all scene assets one by one.
         If scene_ids is provided, only generate those specific scenes.
@@ -379,7 +419,18 @@ class PipelineOrchestrator:
         `upscale_inline=True` upscales each clip to the channel target right
         after it passes QA, so every finished scene is immediately final.
         """
+        self._is_paused = False
+        self._cancel_flag = False
         self._batch_mode = batch
+        self._video_model_loaded = False
+        # No explicit resolution -> use 832x480, NOT the model-family default
+        # (1152x640): with the Gemma-12B text encoder resident, LTX-22B only
+        # partially fits at 1152x640 and crawls at 15-72s/step (~10min/clip)
+        # instead of ~5s/step. 832x480 is measured VRAM-safe on the 16GB card.
+        if width is None:
+            width = 832
+        if height is None:
+            height = 480
         if batch:
             logger.info("[Pipeline] Batch mode: keeping video model resident across scenes")
         session = get_session()
@@ -395,6 +446,19 @@ class PipelineOrchestrator:
                 query = query.filter(Scene.status.in_([SceneStatus.PENDING, SceneStatus.FAILED]))
             
             scenes = query.order_by(Scene.scene_number).all()
+
+            # Generations orphaned at RUNNING by a dead run (server restart
+            # mid-generation) stay RUNNING forever and make the UI show scenes
+            # as busy/ungenerated. A new run means none of them are live —
+            # mark them FAILED so the DB reflects reality.
+            orphaned = session.query(Generation).join(Scene).filter(
+                Scene.project_id == project_id,
+                Generation.status == GenerationStatus.RUNNING,
+            ).all()
+            for og in orphaned:
+                og.status = GenerationStatus.FAILED
+            if orphaned:
+                logger.info(f"[Pipeline] Marked {len(orphaned)} orphaned RUNNING generations as FAILED")
 
             total = len(scenes)
             project.status = ProjectStatus.GENERATING
@@ -419,6 +483,20 @@ class PipelineOrchestrator:
                 except Exception as e:
                     logger.warning(f"[Pipeline] batch free_vram failed: {e}")
 
+            # ── Pre-generate stills for IMG2VID scenes ──────────────────
+            # Generate ALL stills first with one image model load, then free
+            # it so the video model stays resident across scenes (batch mode).
+            # Eliminates image↔video model thrashing (30-60s/scene on 16GB).
+            self._pregenerated_stills = {}
+            img2vid_scenes_to_prerender = [
+                s for s in scenes if s.scene_type == SceneType.IMG2VID
+            ]
+            if img2vid_scenes_to_prerender:
+                self._pre_generate_stills(
+                    img2vid_scenes_to_prerender, images_dir, session,
+                    width=width, height=height,
+                )
+
             for i, scene in enumerate(scenes):
                 self._check_cancel()
                 self._check_pause()
@@ -442,21 +520,7 @@ class PipelineOrchestrator:
 
                     # QA gate: reject truncated/unreadable/static clips so the
                     # retry path kicks in instead of shipping dead footage.
-                    from app.services import qa as qa_svc
-                    from dataclasses import asdict as _asdict
-                    if generation.output_path and str(generation.output_path).endswith(".mp4"):
-                        motion_thr = 0.0 if scene.scene_type == SceneType.STILL_PAN else 3.0
-                        clip_qa = qa_svc.check_clip(
-                            self.config.paths.ffmpeg_bin,
-                            generation.output_path,
-                            float(scene.duration or 0),
-                            motion_threshold=motion_thr,
-                        )
-                        self._qa_notes.setdefault("scenes", []).append(
-                            {"scene": scene.scene_number, **_asdict(clip_qa)})
-                        if not clip_qa.ok:
-                            raise RuntimeError(
-                                f"QA rejected scene {scene.scene_number}: {', '.join(clip_qa.issues)}")
+                    self._qa_gate(scene, generation)
 
                     # Inline upscale: finish the clip completely before moving on
                     if upscale_inline and generation.output_path:
@@ -470,6 +534,11 @@ class PipelineOrchestrator:
                             )
                             generation.upscaled_path = up.output_path
                             logger.info(f"[Pipeline] Scene {scene.scene_number} upscaled inline -> {tw}x{th}")
+                            # The ESRGAN upscale calls ComfyUI /free, evicting the
+                            # resident video model — force a clean free+reload for
+                            # the next scene, otherwise LTX reloads under memory
+                            # pressure ("loaded partially") and crawls.
+                            self._video_model_loaded = False
                         except Exception as up_err:
                             logger.warning(f"[Pipeline] Inline upscale failed for scene {scene.scene_number} (keeping raw): {up_err}")
 
@@ -480,18 +549,38 @@ class PipelineOrchestrator:
                 except Exception as e:
                     logger.error(f"[Pipeline] Scene {scene.scene_number} failed: {e}")
                     scene.status = SceneStatus.FAILED
-                    scene.retry_count += 1
+                    err = str(e)
 
-                    self._check_cancel()
-                    if scene.retry_count <= scene.max_retries:
+                    # Use the whole retry budget within this run (each attempt
+                    # varies seed and, for static clips, img2vid strength).
+                    while scene.retry_count < scene.max_retries:
+                        self._check_cancel()
+                        scene.retry_count += 1
                         try:
-                            self._retry_scene_direct(scene, str(e), clips_dir, images_dir, session, width=width, height=height)
+                            self._retry_scene_direct(scene, err, clips_dir, images_dir, session, width=width, height=height)
+                            project.completed_scenes = i + 1
+                            break
                         except Exception as retry_err:
-                            logger.error(f"[Pipeline] Retry also failed: {retry_err}")
+                            logger.error(
+                                f"[Pipeline] Retry {scene.retry_count}/{scene.max_retries} "
+                                f"for scene {scene.scene_number} failed: {retry_err}")
+                            err = str(retry_err)
 
                 elapsed = time.time() - t0
                 scene_times.append(elapsed)
                 session.commit()
+
+                # Self-heal VRAM squeeze: a healthy img2vid clip takes 60-90s
+                # (832x480, 96 frames). A much slower scene means the resident
+                # video model got squeezed into partial-load mode (other apps
+                # grabbed VRAM, fragmentation) — measured mid-batch: 178s then
+                # 727s/clip until reload. Force a clean free+reload for the
+                # next scene rather than letting the crawl persist.
+                if batch and elapsed > 150 and self._video_model_loaded:
+                    logger.warning(
+                        f"[Pipeline] Scene {scene.scene_number} took {elapsed:.0f}s "
+                        f"(expected <90s) — forcing VRAM free before next scene")
+                    self._video_model_loaded = False
 
                 # ETA calculation
                 if scene_times:
@@ -632,6 +721,118 @@ class PipelineOrchestrator:
             result.append((lora_file, w))
         return result
 
+    def _pre_generate_stills(
+        self, scenes: list, images_dir: Path, session,
+        width=None, height=None,
+    ):
+        """Pre-generate all stills for IMG2VID scenes in one batch.
+
+        Keeps the image model (ZImage/SDXL) loaded for ALL stills, then frees
+        it once.  The subsequent video phase keeps LTX resident across scenes
+        (batch mode) instead of thrashing image↔video models every scene.
+        On a 16GB card this saves 30-60s per scene of model reload time.
+        """
+        import os
+        import hashlib
+        from app.services.image_gen import ImageResult
+
+        ic = self.config.image
+        image_engine = getattr(ic, "engine", "sdxl")
+        sdxl_available = os.path.exists(str(ic.path))
+        zimage_available = (
+            self.config.paths.models_dir / "diffusion_models"
+            / getattr(ic, "zimage_unet", "z_image_turbo_bf16.safetensors")
+        ).exists()
+        image_available = (
+            (zimage_available or sdxl_available)
+            if image_engine == "zimage" else sdxl_available
+        )
+        if not image_available:
+            logger.info("[Pipeline] No image engine available, skipping still pre-generation")
+            return
+
+        logger.info(f"[Pipeline] ── Batch still phase: {len(scenes)} IMG2VID stills ──")
+        self._emit_progress(
+            phase=PipelinePhase.GENERATING,
+            message=f"Generating {len(scenes)} stills (batch image phase)…",
+        )
+
+        for i, scene in enumerate(scenes):
+            self._check_cancel()
+            self._check_pause()
+
+            project = scene.project
+            scene_seed = int(hashlib.md5(project.id.encode()).hexdigest()[:7], 16)
+            version = len(scene.generations) + 1
+            still_path = str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png")
+
+            # A user-pinned still (regenerated via the wizard) always wins
+            pinned = (scene.director_notes or {}).get("pinned_still")
+            if pinned and Path(pinned).exists():
+                self._pregenerated_stills[scene.id] = ImageResult(
+                    path=pinned, width=width or 0, height=height or 0,
+                    seed=scene_seed, generation_time=0.0, prompt_used=scene.prompt,
+                )
+                logger.info(
+                    f"[Pipeline] Still {i+1}/{len(scenes)} "
+                    f"(scene {scene.scene_number}): using user-pinned still"
+                )
+                continue
+
+            # Skip if still already exists from a previous run
+            if Path(still_path).exists():
+                self._pregenerated_stills[scene.id] = ImageResult(
+                    path=still_path, width=width or 0, height=height or 0,
+                    seed=scene_seed, generation_time=0.0, prompt_used=scene.prompt,
+                )
+                logger.info(
+                    f"[Pipeline] Still {i+1}/{len(scenes)} "
+                    f"(scene {scene.scene_number}): exists, reusing"
+                )
+                continue
+
+            self._emit_progress(
+                message=f"Generating still {i+1}/{len(scenes)} "
+                        f"(scene {scene.scene_number})…",
+                percent=(i / len(scenes)) * 30,  # stills = first 30% of progress
+            )
+
+            try:
+                img_result = self.image_gen.generate(
+                    prompt=scene.prompt,
+                    negative_prompt=scene.negative_prompt,
+                    output_path=still_path,
+                    lora_paths=scene.lora_ids,
+                    lora_weights=scene.lora_weights,
+                    width=width,
+                    height=height,
+                    seed=scene_seed,
+                )
+                self._pregenerated_stills[scene.id] = img_result
+                logger.info(
+                    f"[Pipeline] Still {i+1}/{len(scenes)} "
+                    f"(scene {scene.scene_number}): {img_result.generation_time:.1f}s"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[Pipeline] Still {i+1}/{len(scenes)} "
+                    f"(scene {scene.scene_number}) failed: {e}  — will generate inline"
+                )
+
+        # Free the image model so the video phase has full VRAM
+        self.manager.unload()
+        try:
+            from app.services.comfyui_client import ComfyUIClient
+            client = ComfyUIClient()
+            client.free_vram()
+            time.sleep(2)
+            client.free_vram()
+        except Exception:
+            pass
+
+        n_ok = len(self._pregenerated_stills)
+        logger.info(f"[Pipeline] ── Stills phase complete: {n_ok}/{len(scenes)} ──")
+
     def _generate_scene(
         self, scene: Scene, clips_dir: Path, images_dir: Path, session, width: Optional[int] = None, height: Optional[int] = None
     ) -> Generation:
@@ -654,8 +855,15 @@ class PipelineOrchestrator:
         # cause of clips looking totally different scene to scene.
         import hashlib
         scene_seed = int(hashlib.md5(project.id.encode()).hexdigest()[:7], 16)
+        # On retries, nudge the seed: a QA-rejected clip (e.g. "static, no
+        # motion") regenerated with the identical seed produces the identical
+        # rejected clip — each retry just burns another full generation.
+        # For img2vid the still is already fixed, so the seed only varies the
+        # motion sampling; the project's visual "world" is preserved.
+        scene_seed += scene.retry_count
         # Prioritize scene's video model, then project's, then default
         video_model = scene.video_model or getattr(project, "video_model", None) or "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+        num_frames, fps, _ = self._plan_video_params(scene, video_model)
         project_loras = self._get_project_loras(project)
 
         # Per-scene LoRA overrides
@@ -678,18 +886,23 @@ class PipelineOrchestrator:
         image_available = (zimage_available or sdxl_available) if image_engine == "zimage" else sdxl_available
 
         try:
+            clear_vram = not (getattr(self, "_batch_mode", False) and getattr(self, "_video_model_loaded", False))
+
             if scene.scene_type == SceneType.TXT2VID:
                 result = self.video_gen.txt2vid(
                     prompt=scene.prompt,
                     negative_prompt=scene.negative_prompt,
-                    num_frames=int(scene.duration * self.config.video.default_fps),
+                    num_frames=num_frames,
+                    fps=fps,
                     output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                     model_filename=video_model,
                     loras=scene_loras or None,
                     width=width,
                     height=height,
                     seed=scene_seed,
+                    clear_vram_first=clear_vram,
                 )
+                self._video_model_loaded = True
                 gen.model_used = result.model_used
                 gen.output_path = result.path
                 gen.seed = result.seed
@@ -705,14 +918,17 @@ class PipelineOrchestrator:
                     result = self.video_gen.txt2vid(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
-                        num_frames=int(scene.duration * self.config.video.default_fps),
+                        num_frames=num_frames,
+                        fps=fps,
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                         model_filename=video_model,
                         loras=scene_loras or None,
                         width=width,
                         height=height,
                         seed=scene_seed,
+                        clear_vram_first=clear_vram,
                     )
+                    self._video_model_loaded = True
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
                     gen.output_path = result.path
                     gen.seed = result.seed
@@ -722,37 +938,63 @@ class PipelineOrchestrator:
                         "num_frames": result.num_frames, "fps": result.fps,
                     }
                 else:
-                    # 1. Generate image first
-                    img_result = self.image_gen.generate(
-                        prompt=scene.prompt,
-                        negative_prompt=scene.negative_prompt,
-                        output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
-                        lora_paths=scene.lora_ids,
-                        lora_weights=scene.lora_weights,
-                        width=width,
-                        height=height,
-                        seed=scene_seed,
-                    )
+                    # A user-pinned still (regenerated via the wizard) always
+                    # wins — it's the image the user approved for this scene.
+                    pinned = (scene.director_notes or {}).get("pinned_still")
+                    if pinned and os.path.exists(pinned):
+                        from app.services.image_gen import ImageResult
+                        pre_still = ImageResult(
+                            path=pinned, width=0, height=0, seed=scene_seed,
+                            generation_time=0.0, prompt_used=scene.prompt,
+                        )
+                        logger.info(f"[Pipeline] Scene {scene.scene_number}: animating user-pinned still")
+                    else:
+                        # Check for pre-generated still (batch image phase)
+                        pre_still = getattr(self, '_pregenerated_stills', {}).get(scene.id)
+                    if pre_still:
+                        img_result = pre_still
+                        logger.info(f"[Pipeline] Scene {scene.scene_number}: using pre-generated still")
+                    else:
+                        # Fallback: generate still inline (e.g. retry path,
+                        # or pre-generation failed for this scene)
+                        img_result = self.image_gen.generate(
+                            prompt=scene.prompt,
+                            negative_prompt=scene.negative_prompt,
+                            output_path=str(images_dir / f"scene_{scene.scene_number:03d}_v{version}.png"),
+                            lora_paths=scene.lora_ids,
+                            lora_weights=scene.lora_weights,
+                            width=width,
+                            height=height,
+                            seed=scene_seed,
+                        )
+                        self.manager.unload()
+
                     gen.thumbnail_path = img_result.path
                     session.commit()
-                    self.manager.unload()
 
-                    # 2. Img2Vid
+                    # Only force VRAM free if we just generated a still inline
+                    # (which loaded the image model into ComfyUI). If the still
+                    # was pre-generated, the image model is already freed and the
+                    # video model may be resident from a previous scene (batch).
+                    need_vram_free = True if not pre_still else clear_vram
                     result = self.video_gen.img2vid(
                         prompt=scene.prompt,
                         image_path=img_result.path,
                         negative_prompt=scene.negative_prompt,
-                        num_frames=int(scene.duration * self.config.video.default_fps),
+                        num_frames=num_frames,
+                        fps=fps,
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                         model_filename=video_model,
                         loras=scene_loras or None,
                         width=width,
                         height=height,
                         seed=scene_seed,
+                        clear_vram_first=need_vram_free,
                     )
+                    self._video_model_loaded = True
                     gen.model_used = f"{image_engine}+{result.model_used}"
                     gen.thumbnail_path = img_result.path
-                    gen.generation_time_sec = img_result.generation_time + result.generation_time
+                    gen.generation_time_sec = (img_result.generation_time or 0) + result.generation_time
 
                 gen.output_path = result.path
                 gen.seed = result.seed
@@ -765,14 +1007,17 @@ class PipelineOrchestrator:
                     result = self.video_gen.txt2vid(
                         prompt=scene.prompt,
                         negative_prompt=scene.negative_prompt,
-                        num_frames=int(scene.duration * self.config.video.default_fps),
+                        num_frames=num_frames,
+                        fps=fps,
                         output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
                         model_filename=video_model,
                         loras=scene_loras or None,
                         width=width,
                         height=height,
                         seed=scene_seed,
+                        clear_vram_first=clear_vram,
                     )
+                    self._video_model_loaded = True
                     gen.model_used = f"txt2vid-fallback:{result.model_used}"
                     gen.output_path = result.path
                     gen.seed = result.seed
@@ -833,6 +1078,58 @@ class PipelineOrchestrator:
 
         return gen
 
+    def _plan_video_params(self, scene: Scene, video_model: str) -> tuple[int, int, float]:
+        """Return (num_frames, fps, actual_clip_duration) for a scene.
+
+        fps MUST match what the ComfyUI workflow encodes at (the model-family
+        default), otherwise clips come out shorter than scene.duration:
+        64 frames computed at config's 16fps but encoded at 24fps gave 2.67s
+        clips for 4.0s scenes, which also corrupted crossfade offsets at
+        assembly. Frames are capped at 97 — the measured VRAM-safe ceiling
+        for LTX-22B at 832x480 on the 16GB card.
+        """
+        from app.services.comfyui_client import get_defaults_for_model
+        fps = int(get_defaults_for_model(video_model).get("fps")
+                  or self.config.video.default_fps)
+        num_frames = min(int(float(scene.duration or 4.0) * fps), 97)
+        # LTX only generates 8n+1 frame counts and silently rounds DOWN —
+        # requesting 96 yielded 89 frames (3.71s clips for 4.0s scenes, a
+        # 15s shortfall across a 50-clip video). Snap UP to the next 8n+1.
+        num_frames = min(((num_frames - 1 + 7) // 8) * 8 + 1, 97)
+        return num_frames, fps, num_frames / fps
+
+    def _qa_gate(self, scene: Scene, generation) -> None:
+        """Reject truncated/unreadable/static clips — raises RuntimeError so
+        the retry path kicks in instead of shipping dead footage. Must run on
+        EVERY generated clip, including retries."""
+        from app.services import qa as qa_svc
+        from dataclasses import asdict as _asdict
+        if not (generation.output_path and str(generation.output_path).endswith(".mp4")):
+            return
+        video_model = (scene.video_model or getattr(scene.project, "video_model", None)
+                       or "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf")
+        _, _, planned_duration = self._plan_video_params(scene, video_model)
+        # STILL_PAN clips are rendered by ffmpeg at the full scene duration;
+        # txt2vid/img2vid clips at the (possibly frame-capped) planned duration.
+        expected = (float(scene.duration or 0)
+                    if scene.scene_type == SceneType.STILL_PAN else planned_duration)
+        # LTX img2vid often yields very subtle motion (especially with strength≥0.6),
+        # so the motion threshold is lowered from 3.0 to 1.0 for IMG2VID so QA stops
+        # constantly rejecting valid clips.
+        motion_thr = 0.0 if scene.scene_type == SceneType.STILL_PAN else (
+            1.0 if scene.scene_type == SceneType.IMG2VID else 3.0)
+        clip_qa = qa_svc.check_clip(
+            self.config.paths.ffmpeg_bin,
+            generation.output_path,
+            expected,
+            motion_threshold=motion_thr,
+        )
+        self._qa_notes.setdefault("scenes", []).append(
+            {"scene": scene.scene_number, **_asdict(clip_qa)})
+        if not clip_qa.ok:
+            raise RuntimeError(
+                f"QA rejected scene {scene.scene_number}: {', '.join(clip_qa.issues)}")
+
     def _retry_scene_direct(
         self, scene: Scene, error: str,
         clips_dir: Path, images_dir: Path, session,
@@ -855,8 +1152,28 @@ class PipelineOrchestrator:
                 )
                 scene.scene_type = SceneType.TXT2VID
 
-        self._generate_scene(scene, clips_dir, images_dir, session, width=width, height=height)
+        # QA rejected the clip as static? Retrying with identical settings
+        # reproduces the same static clip. Lower img2vid strength for this
+        # attempt — lower strength lets the clip depart further from the
+        # still, i.e. more motion. (The seed is also nudged per retry in
+        # _generate_scene.)
+        vc = self.config.video
+        orig_strength = getattr(vc, "img2vid_strength", 0.7)
+        if "static clip" in error_lower and scene.scene_type == SceneType.IMG2VID:
+            vc.img2vid_strength = max(0.5, round(orig_strength - 0.1 * scene.retry_count, 2))
+            logger.info(
+                f"[Pipeline] Scene {scene.scene_number}: static-clip retry, "
+                f"img2vid_strength {orig_strength} -> {vc.img2vid_strength}"
+            )
+        try:
+            generation = self._generate_scene(scene, clips_dir, images_dir, session, width=width, height=height)
+            # Retried clips must pass the same QA gate as first attempts —
+            # previously they were marked GENERATED unchecked.
+            self._qa_gate(scene, generation)
+        finally:
+            vc.img2vid_strength = orig_strength
         scene.status = SceneStatus.GENERATED
+        scene.active_generation_id = generation.id
 
     def _retry_scene(
         self, scene: Scene, error: str,
@@ -882,12 +1199,17 @@ class PipelineOrchestrator:
         if "kenburns" in model_suggestion.lower() and scene.scene_type != SceneType.STILL_PAN:
             scene.scene_type = SceneType.STILL_PAN
 
-        self._generate_scene(scene, clips_dir, images_dir, session)
+        generation = self._generate_scene(scene, clips_dir, images_dir, session)
         scene.status = SceneStatus.GENERATED
+        scene.active_generation_id = generation.id
 
     # ── Phase 4: Upscale ───────────────────────────────────────────────
 
     def start_upscale(self, project_id: str):
+        with self._exclusive("upscale"):
+            return self._start_upscale_impl(project_id)
+
+    def _start_upscale_impl(self, project_id: str):
         """Upscale all approved/generated clips."""
         session = get_session()
         try:
@@ -1011,6 +1333,80 @@ class PipelineOrchestrator:
 
         finally:
             self.manager.unload()
+            session.close()
+
+    def start_upscale_scene(self, scene_id: str):
+        with self._exclusive("upscale (single scene)"):
+            return self._start_upscale_scene_impl(scene_id)
+
+    def _start_upscale_scene_impl(self, scene_id: str):
+        """Upscale a single generated clip."""
+        session = get_session()
+        try:
+            scene = session.query(Scene).get(scene_id)
+            if not scene:
+                raise ValueError(f"Scene {scene_id} not found")
+            
+            if scene.status not in [SceneStatus.GENERATED, SceneStatus.APPROVED]:
+                raise ValueError(f"Scene {scene_id} is not generated yet")
+
+            project = session.query(Project).get(scene.project_id)
+            if not project:
+                raise ValueError("Project not found")
+
+            gen = scene.active_generation
+            if not gen or not gen.output_path:
+                raise ValueError(f"Scene {scene_id} has no output clip")
+
+            # Skip if already upscaled
+            if gen.upscaled_path and gen.upscaled_path != gen.output_path and Path(gen.upscaled_path).exists():
+                logger.info(f"[Pipeline] Scene {scene.scene_number} already upscaled")
+                return
+
+            res_map = {"1080p": (1920, 1080), "2k": (2560, 1440)}
+            channel = project.channel
+            target_res = res_map.get(channel.target_resolution, (1920, 1080))
+
+            self._emit_progress(
+                phase=PipelinePhase.UPSCALING,
+                current_scene=scene.scene_number,
+                total_scenes=1,
+                percent=0,
+                message=f"Upscaling scene {scene.scene_number} (HD+)",
+            )
+
+            try:
+                result = self.upscaler.upscale_video(
+                    input_path=gen.output_path,
+                    target_width=target_res[0],
+                    target_height=target_res[1],
+                    ffmpeg_bin=self.config.paths.ffmpeg_bin,
+                )
+                gen.upscaled_path = result.output_path
+            except Exception as e:
+                logger.error(f"[Pipeline] Upscale failed for scene {scene.scene_number}: {e}")
+                gen.upscaled_path = gen.output_path
+                raise
+
+            session.commit()
+            
+            # Note: We do NOT unload self.manager here to avoid disrupting batch generation
+            
+            self._emit_progress(
+                phase=PipelinePhase.IDLE,
+                message=f"Scene {scene.scene_number} upscale complete",
+                percent=100.0,
+            )
+
+        except Exception as e:
+            logger.error(f"[Pipeline] Single upscale failed: {e}", exc_info=True)
+            self._emit_progress(
+                phase=PipelinePhase.ERROR,
+                error=str(e),
+                message=f"Upscale failed: {e}",
+            )
+            raise
+        finally:
             session.close()
 
     # ── Phase 5: Music Generation ─────────────────────────────────
@@ -1236,6 +1632,16 @@ class PipelineOrchestrator:
         music_path: Optional[str] = None,
         resolution: Optional[str] = None,
     ):
+        with self._exclusive("render"):
+            return self._render_impl(project_id, narration_path, music_path, resolution)
+
+    def _render_impl(
+        self,
+        project_id: str,
+        narration_path: Optional[str] = None,
+        music_path: Optional[str] = None,
+        resolution: Optional[str] = None,
+    ):
         """Assemble all clips + audio into final video.
 
         `resolution` overrides the channel default (e.g. "4k" for 3840x2160).
@@ -1393,6 +1799,14 @@ class PipelineOrchestrator:
     # ── Convenience: Full Auto Pipeline ────────────────────────────────
 
     def run_full_auto(
+        self,
+        project_id: str,
+        narration_path: Optional[str] = None,
+    ):
+        with self._exclusive("full-auto"):
+            return self._run_full_auto_impl(project_id, narration_path)
+
+    def _run_full_auto_impl(
         self,
         project_id: str,
         narration_path: Optional[str] = None,
@@ -1569,4 +1983,10 @@ class PipelineCancelled(Exception):
 class PipelinePaused(Exception):
     """Graceful pause: stop after the current item, keep all finished work,
     leave the project in a resumable (non-failed) state."""
+    pass
+
+
+class PipelineBusy(Exception):
+    """Another exclusive phase (generation/upscale/render) is already running.
+    The caller should surface this to the user instead of queueing blindly."""
     pass

@@ -13,6 +13,7 @@ import argparse
 import time
 from pathlib import Path
 import os
+from PIL import Image
 
 def main():
     parser = argparse.ArgumentParser()
@@ -33,7 +34,8 @@ def main():
     model_path = params["model_path"]
     gemma_root = params["gemma_root"]
     spatial_upsampler_path = params["spatial_upsampler_path"]
-    loras = params.get("loras", [])  # list of dicts {"path": str, "weight": float}
+    loras = params.get("loras", [])
+    image_path = params.get("image_path")
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +52,8 @@ def main():
     print(f"[LTX] Resolution: {width}x{height}, frames: {num_frames}, fps: {fps}")
     print(f"[LTX] Steps: {steps}, Seed: {seed}")
     print(f"[LTX] Model: {model_path}")
+    if image_path:
+        print(f"[LTX] Image: {image_path}")
 
     t0 = time.time()
 
@@ -85,6 +89,13 @@ def main():
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(num_frames, tiling_config)
 
+    # Prepare images if img2vid
+    images_input = []
+    if mode == "img2vid" and image_path and os.path.exists(image_path):
+        img = Image.open(image_path).convert("RGB")
+        img = img.resize((width, height), Image.LANCZOS)
+        images_input = [img]
+
     video, audio = pipeline(
         prompt=prompt,
         seed=seed,
@@ -92,7 +103,7 @@ def main():
         width=width,
         num_frames=num_frames,
         frame_rate=fps,
-        images=[], # img2vid uses conditioning images
+        images=images_input,
         tiling_config=tiling_config,
     )
 

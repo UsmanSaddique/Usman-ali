@@ -165,21 +165,29 @@ class AssemblerService:
                 f"setsar=1,fps={fps}[v{i}]"
             )
 
+        # xfade offsets must come from each clip's REAL duration, not the
+        # planned scene duration: when a clip renders short (e.g. frame caps),
+        # an offset past end-of-stream freezes the last frame until the fade.
+        durations = []
+        for clip in clips:
+            d = self._get_duration(clip.path)
+            durations.append(d if d > 0 else clip.duration)
+
         # Chain xfade transitions
         # First pair
         td = transition_duration
         if len(clips) == 2:
-            offset = max(0, clips[0].duration - td)
+            offset = max(0, durations[0] - td)
             filter_parts.append(
                 f"[v0][v1]xfade=transition=fade:duration={td}:offset={offset}[vout]"
             )
         else:
             # Chain: v0+v1→x0, x0+v2→x1, x1+v3→x2, ...
-            offset = max(0, clips[0].duration - td)
+            offset = max(0, durations[0] - td)
             filter_parts.append(
                 f"[v0][v1]xfade=transition=fade:duration={td}:offset={offset}[x0]"
             )
-            running_offset = offset + clips[1].duration - td
+            running_offset = offset + durations[1] - td
             for i in range(2, len(clips)):
                 prev = f"x{i-2}"
                 out = f"x{i-1}" if i < len(clips) - 1 else "vout"
@@ -187,7 +195,7 @@ class AssemblerService:
                 filter_parts.append(
                     f"[{prev}][v{i}]xfade=transition=fade:duration={td}:offset={offset}[{out}]"
                 )
-                running_offset = offset + clips[i].duration - td
+                running_offset = offset + durations[i] - td
 
         filter_graph = ";\n".join(filter_parts)
 

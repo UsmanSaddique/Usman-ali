@@ -277,26 +277,20 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                 import urllib.request
                 import json
                 
-                url = f"{self.base_url}/api/chat"
+                url = f"{self.base_url}/v1/chat/completions"
                 
                 payload = {
                     "model": self.model_name,
                     "messages": messages,
                     "stream": stream,
-                    "options": {
-                        "temperature": temperature,
-                        "num_predict": max_tokens,
-                        "num_ctx": self.n_ctx
-                    }
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
                 }
+                
                 if response_format and response_format.get("type") == "json_object":
-                    payload["format"] = "json"
-
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode('utf-8'),
-                    headers={'Content-Type': 'application/json'}
-                )
+                    payload["response_format"] = {"type": "json_object"}
+                    
+                req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={'Content-Type': 'application/json'})
                 
                 try:
                     if stream:
@@ -318,15 +312,7 @@ def create_llm_loader(config) -> Callable[[], LoadedModel]:
                         return generator()
                     else:
                         with urllib.request.urlopen(req) as response:
-                            result = json.loads(response.read().decode('utf-8'))
-                            # map Ollama response to OpenAI style for DirectorService compatibility
-                            return {
-                                "choices": [
-                                    {
-                                        "message": result.get("message", {"content": ""})
-                                    }
-                                ]
-                            }
+                            return json.loads(response.read().decode('utf-8'))
                 except Exception as e:
                     import logging
                     logging.getLogger(__name__).error(f"Ollama API Error: {e}")

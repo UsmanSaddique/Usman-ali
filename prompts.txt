@@ -6,3 +6,28 @@ u584830220_
 u584830220_burjcom
 NoMorePass@2026
 burjcom_super_secret_key_2024_very_secure
+
+--------------------------------------------------------------------
+
+
+Act as a world-class children's songwriter, a YouTube Kids content strategist, and an expert in YouTube SEO. Your task is to write a complete set of song lyrics for a 4 to 5-minute video for the YouTube channel "Little Fairy Dreams".
+
+Before writing the lyrics, you must select an EXTREMELY UNIQUE, magical niche topic that fits the "Little Fairy Dreams" brand. Do not use generic topics like standard farm animals, basic numbers, or everyday bedtime routines. Instead, focus on a highly imaginative, hyper-niche concept (e.g., "Bioluminescent deep-sea fairies planting glowing coral," "The Moon-Dust Bakers who bake shooting stars in the rings of Saturn," or "The Clockwork Pixies who repair the gears of time so kids can sleep longer"). 
+
+Here are the strict parameters for the output:
+
+1. THE NICHE & SEO METADATA
+* Define the unique niche you have chosen.
+* Provide an SEO-Optimized YouTube Title (Catchy, under 70 characters, including high-volume keywords like "Magical Lullaby," "Kids Sleep Song," or "Toddler Fantasy Music").
+* Provide an SEO-Optimized YouTube Description (Include the lyrics, a call-to-action to subscribe to Little Fairy Dreams, and 3-5 relevant hashtags).
+* Provide 15 highly targeted YouTube Tags (mix of broad kids' music tags and specific niche tags).
+
+2. THE SONG LYRICS (4-5 MINUTE LENGTH)
+To ensure the song translates to 4-5 minutes of video/audio time, the structure must be deliberate and well-paced. Use a slow, magical tempo (around 60-70 BPM). Include timestamps and stage directions for the animator/musician.
+* Structure: Intro -> Verse 1 -> Chorus -> Verse 2 -> Chorus -> Long Instrumental/Animation Break -> Verse 3 -> Bridge -> Chorus -> Extended Outro.
+* Tone: Calming, wondrous, dreamy, and slightly whimsical. Perfect for winding down, imaginative play, or bedtime.
+* Rhyme Scheme: Simple, melodic, and predictable (AABB or ABAB) so toddlers can follow along.
+* Repetition: Ensure the Chorus is highly repetitive and catchy, as this is essential for kids' music and taking up track time.
+* Pacing Notes: Add [Musical Cues] in brackets (e.g., [Soft glockenspiel solo], [Gentle harp glissando], [20-second magical animation sequence without singing]) to stretch the runtime naturally without cramming in too many words.
+
+Now, take a deep breath, tap into your most creative fairy-tale imagination, and generate the complete package for "Little Fairy Dreams".

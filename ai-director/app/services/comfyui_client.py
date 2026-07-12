@@ -146,6 +146,7 @@ class ComfyUIClient:
     ) -> dict:
         t0 = time.time()
         last_log_time = 0
+        missing_checks = 0
         while time.time() - t0 < timeout:
             hist = self.get_history(prompt_id)
             if hist:
@@ -157,22 +158,37 @@ class ComfyUIClient:
                     msgs = hist.get("status", {}).get("messages", [])
                     raise RuntimeError(f"ComfyUI error: {msgs}")
             
-            # Log queue status periodically
+            # Log queue status periodically — and detect vanished jobs: a job
+            # in neither history nor the queue was cleared (queue wipe or
+            # ComfyUI restart). Waiting out the full timeout for it leaves
+            # zombie threads that later fire bogus fallbacks — fail fast.
             now = time.time()
             if now - last_log_time > 10.0:
-                q_status = self.get_queue_status()
-                queue_running = q_status.get("queue_running", [])
-                queue_pending = q_status.get("queue_pending", [])
-                
-                is_running = any(item[1] == prompt_id for item in queue_running)
-                is_pending = any(item[1] == prompt_id for item in queue_pending)
-                
-                if is_running:
-                    logger.info(f"[ComfyUI] Generating video... (currently running)")
-                elif is_pending:
-                    logger.info(f"[ComfyUI] Waiting in queue... ({len(queue_pending)} pending)")
-                else:
-                    logger.info(f"[ComfyUI] Processing request...")
+                try:
+                    q_status = self.get_queue_status()
+                except Exception:
+                    q_status = None
+                if q_status is not None:
+                    queue_running = q_status.get("queue_running", [])
+                    queue_pending = q_status.get("queue_pending", [])
+
+                    is_running = any(item[1] == prompt_id for item in queue_running)
+                    is_pending = any(item[1] == prompt_id for item in queue_pending)
+
+                    if is_running:
+                        missing_checks = 0
+                        logger.info(f"[ComfyUI] Generating video... (currently running)")
+                    elif is_pending:
+                        missing_checks = 0
+                        logger.info(f"[ComfyUI] Waiting in queue... ({len(queue_pending)} pending)")
+                    else:
+                        missing_checks += 1
+                        logger.info(f"[ComfyUI] Job {prompt_id[:8]} not visible in queue "
+                                    f"({missing_checks}/3 checks)")
+                        if missing_checks >= 3:
+                            raise RuntimeError(
+                                f"ComfyUI job disappeared (queue cleared or ComfyUI "
+                                f"restarted): {prompt_id}")
                 last_log_time = now
 
             time.sleep(poll)
@@ -479,11 +495,18 @@ def build_ltx_img2vid_workflow(
     pos = nid(); wf[pos] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": cur_clip}}
     neg = nid(); wf[neg] = {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt or "", "clip": cur_clip}}
     img = nid(); wf[img] = {"class_type": "LoadImage", "inputs": {"image": image_filename}}
+    # Scale the source still down to the target video resolution. The image
+    # arrives from SDXL/ZImage at a higher res (e.g. 1024×1024) for quality;
+    # without this resize LTX processes at that oversized resolution, spilling
+    # VRAM and turning a 40s job into 10-15 min.
+    scaled_img = nid(); wf[scaled_img] = {"class_type": "ImageScale", "inputs": {
+        "image": [img, 0], "upscale_method": "lanczos",
+        "width": width, "height": height, "crop": "disabled"}}
 
     i2v = nid()
     wf[i2v] = {"class_type": "LTXVImgToVideo", "inputs": {
         "positive": [pos, 0], "negative": [neg, 0], "vae": [vae_node, 0],
-        "image": [img, 0], "width": width, "height": height,
+        "image": [scaled_img, 0], "width": width, "height": height,
         "length": num_frames, "batch_size": 1, "strength": strength}}
 
     samp = nid()

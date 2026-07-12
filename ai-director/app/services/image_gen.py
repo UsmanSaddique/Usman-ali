@@ -43,6 +43,7 @@ class ImageGenService:
         if not client.wait_ready(30):
             raise RuntimeError("ComfyUI not reachable for Z-Image")
         self.manager.unload()
+        client.free_vram()
 
         ic = self.config.image
         # Render near Z-Image's native ~1MP budget preserving aspect; the video
@@ -91,6 +92,7 @@ class ImageGenService:
             raise RuntimeError("ComfyUI not reachable for SDXL")
         # free the LLM/other VRAM so SDXL has room
         self.manager.unload()
+        client.free_vram()
 
         ckpt = _P(str(self.config.image.path)).name
         style_loras = [tuple(x) for x in getattr(self.config.image, "style_loras", []) or []]

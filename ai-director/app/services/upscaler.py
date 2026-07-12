@@ -98,6 +98,7 @@ class UpscalerService:
         target_width: int = 1920,
         target_height: int = 1080,
         ffmpeg_bin: str = "ffmpeg",
+        upscale_model: Optional[str] = None,
     ) -> UpscaleResult:
         """
         Upscale a video clip frame-by-frame:
@@ -150,10 +151,12 @@ class UpscalerService:
             try:
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return self._comfyui_esrgan_upscale(input_path, output_path,
-                                                    target_width, target_height, ffmpeg_bin)
+                                                    target_width, target_height, ffmpeg_bin, upscale_model)
             except Exception as e:
                 logger.warning(f"[Upscaler] ComfyUI ESRGAN failed ({e}); trying python ESRGAN")
                 frames_in.mkdir(parents=True, exist_ok=True); frames_out.mkdir(parents=True, exist_ok=True)
+                # Re-extract frames since temp_dir was deleted before trying ComfyUI
+                subprocess.run(extract_cmd, capture_output=True, check=True, timeout=120)
             try:
                 loaded = self.manager.load(ModelType.UPSCALER)
                 upsampler = loaded.model
@@ -292,7 +295,7 @@ class UpscalerService:
             return False
 
     def _comfyui_esrgan_upscale(self, input_path, output_path, target_width, target_height,
-                                ffmpeg_bin) -> "UpscaleResult":
+                                ffmpeg_bin, upscale_model=None) -> "UpscaleResult":
         """4x ESRGAN (4x-UltraSharp) upscale via ComfyUI then downscale to target —
         genuine detail, not a smeared lanczos resize."""
         import shutil as _sh
@@ -320,47 +323,65 @@ class UpscalerService:
         # hair/shirt edges instead of the ringing/over-sharpened edges 4x-UltraSharp
         # (a photoreal model) produces — and it's a smaller/faster net.
         up_cfg = getattr(self.config, "upscale", None)
-        model_name = "4x-UltraSharp.pth"
-        if up_cfg is not None:
+        model_name = upscale_model or "4x-UltraSharp.pth"
+        if not upscale_model and up_cfg is not None:
             anime = getattr(up_cfg, "anime_model_path", None)
             if getattr(up_cfg, "use_anime_model", False) and anime is not None:
                 model_name = _P(str(anime)).name
         t0 = time.time()
         out_dir = _P(output_path).parent; out_dir.mkdir(parents=True, exist_ok=True)
-        chunk_files = []
-        offset = 0
-        idx = 0
-        # If we couldn't determine the frame count, don't risk submitting chunks
-        # past the end of the video (which errors) — process the whole clip at once.
-        single_pass = total <= 0
-        while True:
-            client.free_vram()
-            prefix = f"hdchunk_{_P(input_path).stem}_{idx}"
-            cap = 0 if single_pass else CHUNK
-            wf = build_esrgan_video_upscale_workflow(
-                video_filename=name, target_width=target_width, target_height=target_height,
-                fps=fps, output_prefix=prefix, frame_load_cap=cap, skip_first_frames=offset,
-                model_name=model_name)
-            pid = client.submit(wf)
-            try:
-                hist = client.wait_for_completion(pid, timeout=900, poll=2.0)
-                cf = str(out_dir / f"{prefix}.mp4")
-                client.collect_output(hist, cf)
-                chunk_files.append(cf)
-            except Exception as e:
-                # A chunk starting past the last frame (frame-count rounding) yields
-                # no output — tolerate it once we already have frames, else re-raise.
-                if chunk_files and not single_pass:
-                    logger.warning(f"[Upscaler] chunk {idx} produced no output ({e}); stopping")
+        def _run_chunks(chunk: int) -> list[str]:
+            """Upscale the clip in `chunk`-frame passes; chunk<=0 = whole clip."""
+            files = []
+            offset = 0
+            idx = 0
+            single_pass = chunk <= 0 or total <= 0
+            while True:
+                client.free_vram()
+                prefix = f"hdchunk_{_P(input_path).stem}_c{chunk}_{idx}"
+                cap = 0 if single_pass else chunk
+                wf = build_esrgan_video_upscale_workflow(
+                    video_filename=name, target_width=target_width, target_height=target_height,
+                    fps=fps, output_prefix=prefix, frame_load_cap=cap, skip_first_frames=offset,
+                    model_name=model_name)
+                pid = client.submit(wf)
+                try:
+                    hist = client.wait_for_completion(pid, timeout=900, poll=2.0)
+                    cf = str(out_dir / f"{prefix}.mp4")
+                    client.collect_output(hist, cf)
+                    files.append(cf)
+                except Exception as e:
+                    # A chunk starting past the last frame (frame-count rounding) yields
+                    # no output — tolerate it once we already have frames, else re-raise.
+                    if files and not single_pass:
+                        logger.warning(f"[Upscaler] chunk {idx} produced no output ({e}); stopping")
+                        break
+                    raise
+                offset += chunk; idx += 1
+                if single_pass:
                     break
+                if offset >= total:
+                    break
+                if idx > 64:  # safety
+                    break
+            return files
+
+        # Single pass first: a whole ~96-frame clip fits on the 16GB card and
+        # skips 5 extra model reloads + the chunk concat. Fall back to the
+        # proven 16-frame chunks only if the single pass fails (e.g. OOM on a
+        # much longer clip).
+        try:
+            chunk_files = _run_chunks(0)
+        except Exception as e:
+            # Chunked retry is for genuine execution failures (OOM on a long
+            # clip). A job that DISAPPEARED (queue cleared / ComfyUI restart)
+            # would just vanish again — propagate so the caller handles it.
+            if "disappeared" in str(e).lower():
                 raise
-            offset += CHUNK; idx += 1
-            if single_pass:
-                break
-            if offset >= total:
-                break
-            if idx > 64:  # safety
-                break
+            logger.warning(
+                f"[Upscaler] single-pass upscale failed ({e}); retrying in {CHUNK}-frame chunks")
+            client.free_vram()
+            chunk_files = _run_chunks(CHUNK)
         # concat chunks
         if len(chunk_files) == 1:
             _sh.copy2(chunk_files[0], output_path)
@@ -376,7 +397,7 @@ class UpscalerService:
         for c in chunk_files:
             try: os.remove(c)
             except Exception: pass
-        logger.info(f"[Upscaler] ComfyUI 4x ESRGAN ({idx} chunks) -> {target_width}x{target_height} in {time.time()-t0:.0f}s")
+        logger.info(f"[Upscaler] ComfyUI 4x ESRGAN ({len(chunk_files)} pass(es)) -> {target_width}x{target_height} in {time.time()-t0:.0f}s")
         return UpscaleResult(input_path=input_path, output_path=output_path,
                              input_resolution=(0, 0), output_resolution=(target_width, target_height),
                              processing_time=time.time() - t0, frame_count=total)

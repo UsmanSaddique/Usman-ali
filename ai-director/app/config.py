@@ -122,9 +122,9 @@ class VideoModelConfig(BaseModel):
     use_fp8: bool = True
     default_width: int = 768
     default_height: int = 512
-    default_num_frames: int = 121  # ~5s at 24fps
-    default_fps: int = 24
-    default_steps: int = 10       # 10 steps = good quality/speed balance on 16GB (12 too slow with LoRAs)
+    default_num_frames: int = 81  # ~5s at 16fps
+    default_fps: int = 16
+    default_steps: int = 8        # 8 steps = faster generation while keeping good LTX quality
     default_cfg: float = 1.0      # distilled models use low cfg
     seed: int = -1                # -1 = random
     # img2vid: higher = clip stays closer to the (clean) still -> less hair/shirt
@@ -194,7 +194,10 @@ class Settings(BaseSettings):
     app_name: str = "AI Director"
     host: str = "0.0.0.0"
     port: int = 8000
-    debug: bool = True
+    # MUST stay False for production use: True turns on uvicorn auto-reload,
+    # which restarts the server (killing any in-flight generation run) every
+    # time a .py file is edited.
+    debug: bool = False
 
     paths: PathConfig = PathConfig()
     llm: LLMModelConfig = LLMModelConfig()

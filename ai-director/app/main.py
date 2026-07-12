@@ -356,6 +356,16 @@ def _media_url(path: Optional[str]) -> Optional[str]:
         return None
 
 
+def _ensure_pipeline_idle():
+    """Reject a heavy-phase request up front (HTTP 409) while another phase
+    (generation/upscale/render) is running — clearer for the UI than letting
+    the background thread die on PipelineBusy where the user can't see it."""
+    busy = pipeline.busy_phase
+    if busy:
+        raise HTTPException(
+            409, f"Pipeline is busy ({busy}). Wait for it to finish or cancel it first.")
+
+
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).get(project_id)
@@ -366,6 +376,12 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
     for s in project.scenes:
         gen = s.active_generation
         clip_path = (gen.upscaled_path or gen.output_path) if gen else None
+        # A user-regenerated ("pinned") still overrides the generation's
+        # thumbnail — it is what the NEXT video generation will animate.
+        notes = s.director_notes or {}
+        pinned = notes.get("pinned_still")
+        still_path = (pinned if pinned and Path(pinned).exists() else None) \
+            or (gen.thumbnail_path if gen else None)
         scenes_data.append({
             "id": s.id,
             "scene_number": s.scene_number,
@@ -381,8 +397,9 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
             "active_version": gen.version if gen else None,
             "clip_path": clip_path,
             "clip_url": _media_url(clip_path),
-            "thumbnail_path": gen.thumbnail_path if gen else None,
-            "thumb_url": _media_url(gen.thumbnail_path if gen else None),
+            "thumbnail_path": still_path,
+            "thumb_url": _media_url(still_path),
+            "still_regen": notes.get("still_regen"),
             "upscaled": bool(gen and gen.upscaled_path and gen.upscaled_path != gen.output_path),
         })
 
@@ -512,6 +529,7 @@ def start_generation(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).get(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
 
     def run():
         from app.services.pipeline import PipelinePaused
@@ -534,6 +552,7 @@ def generate_scenes(project_id: str, req: GenerateScenesReq, db: Session = Depen
     project = db.query(Project).get(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
 
     logger.info(f"generate_scenes called for project {project_id} with req: {req.model_dump()}")
 
@@ -572,6 +591,7 @@ def start_upscale(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).get(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
 
     def run():
         try:
@@ -585,12 +605,33 @@ def start_upscale(project_id: str, db: Session = Depends(get_db)):
     return {"status": "started", "message": "Upscaling started"}
 
 
+@app.post("/api/scenes/{scene_id}/upscale")
+def upscale_scene(scene_id: str, db: Session = Depends(get_db)):
+    """Upscale a single scene's video."""
+    scene = db.query(Scene).get(scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    _ensure_pipeline_idle()
+
+    def run():
+        try:
+            pipeline.start_upscale_scene(scene_id)
+        except Exception as e:
+            logger.error(f"Single scene upscale failed: {e}", exc_info=True)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Upscaling scene started"}
+
+
 @app.post("/api/projects/{project_id}/render")
 def render_project(project_id: str, db: Session = Depends(get_db)):
     """Phase 6: Final assembly and render."""
     project = db.query(Project).get(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
 
     def run():
         try:
@@ -782,22 +823,160 @@ def scenes_manual(project_id: str, req: ManualScenesReq, db: Session = Depends(g
     from app.database import Scene, SceneType, SceneStatus
     current_count = db.query(Scene).filter(Scene.project_id == project_id).count()
 
+    prompts = [p.strip() for p in req.prompts if p.strip()]
+
+    # Per-scene duration follows the project's duration target, NOT a fixed
+    # 4.0s: the final video length = clip count x duration - crossfade
+    # overlaps, and the music is trimmed to the VIDEO — so a 250s target
+    # with 50 hardcoded 4s clips silently produced a ~2:56 video.
+    # Clip ceiling is ~4.0s (97-frame VRAM-safe cap at 24fps).
+    td = settings.generation.transition_duration
+    n = len(prompts)
+    warning = None
+    per_scene = 4.0
+    if n and project.duration_target:
+        needed_total = project.duration_target + max(0, n - 1) * td
+        per_scene = round(min(max(needed_total / n, 2.0), 4.0), 2)
+        expected_final = n * per_scene - max(0, n - 1) * td
+        if expected_final < project.duration_target - 10:
+            shortfall = project.duration_target - expected_final
+            more = int((shortfall + 4.0 - td - 0.01) // (4.0 - td)) + 1
+            warning = (
+                f"{n} clips x {per_scene}s gives a ~{int(expected_final)}s video, but the "
+                f"project target is {project.duration_target}s (clips are capped at 4s). "
+                f"Add ~{more} more scene prompts to reach the target, or the music will be "
+                f"trimmed to the shorter video.")
+
     new_scenes = []
-    for i, p in enumerate(req.prompts):
-        if not p.strip(): continue
+    for i, p in enumerate(prompts):
         scene = Scene(
             project_id=project_id,
             scene_number=current_count + i + 1,
-            scene_type=SceneType.TXT2VID,
-            prompt=p.strip(),
-            duration=4.0,
+            scene_type=SceneType.IMG2VID,
+            prompt=p,
+            duration=per_scene,
             status=SceneStatus.PENDING,
         )
         db.add(scene)
         new_scenes.append(scene)
-    
+
     db.commit()
-    return {"status": "ok", "scene_count": current_count + len(new_scenes), "added": len(new_scenes)}
+    return {"status": "ok", "scene_count": current_count + len(new_scenes),
+            "added": len(new_scenes), "scene_duration": per_scene, "warning": warning}
+
+
+@app.get("/api/projects/{project_id}/yt-context")
+def yt_context(project_id: str, db: Session = Depends(get_db)):
+    """Full video context as copyable text — paste into any AI chat to get
+    YouTube title/description/tags grounded in what the video ACTUALLY shows."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    scenes = sorted(project.scenes, key=lambda s: s.scene_number)
+    total_sec = int(sum(float(s.duration or 0) for s in scenes))
+    parts = [
+        "You are a YouTube content strategist. Using the complete video context "
+        "below, give me:",
+        "1) 3 masterful YouTube TITLE options (main keyword first, kid- and "
+        "parent-friendly, curiosity without clickbait)",
+        "2) A full DESCRIPTION: 2 short engaging paragraphs, then a \"Lyrics\" "
+        "section, then a call to subscribe",
+        "3) 15 comma-separated TAGS",
+        "4) 5 HASHTAGS",
+        "Match the language of the lyrics (if not English, also add a one-line "
+        "English summary).",
+        "",
+        "=== VIDEO CONTEXT ===",
+        f"Working title: {project.title}",
+        f"Channel: {project.channel.name if project.channel else 'n/a'}",
+        f"Length: ~{total_sec // 60}m {total_sec % 60}s ({len(scenes)} scenes, 1080p)",
+    ]
+    if project.context:
+        parts += ["", "CREATOR NOTES / CONTEXT:", project.context.strip()]
+    if project.music_style:
+        parts += ["", f"MUSIC STYLE: {project.music_style.strip()}"]
+    if project.lyrics:
+        parts += ["", "LYRICS:", '"""', project.lyrics.strip(), '"""']
+    if scenes:
+        parts += ["", "SCENE-BY-SCENE VISUAL STORY:"]
+        for s in scenes:
+            if s.prompt:
+                parts.append(f"{s.scene_number}. {s.prompt.strip()}")
+    return {"text": "\n".join(parts)}
+
+
+class RegenImageReq(BaseModel):
+    prompt: Optional[str] = None
+
+
+@app.post("/api/scenes/{scene_id}/regen-image")
+def regen_scene_image(scene_id: str, req: RegenImageReq, db: Session = Depends(get_db)):
+    """Regenerate a scene's base still (optionally with an edited prompt).
+    The new image is 'pinned' to the scene: the wizard shows it immediately
+    and the next video generation for the scene animates it."""
+    from app.database import Scene
+    scene = db.query(Scene).get(scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+
+    if req.prompt and req.prompt.strip():
+        scene.prompt = req.prompt.strip()
+    notes = dict(scene.director_notes or {})
+    notes["still_regen"] = "running"
+    scene.director_notes = notes
+    db.commit()
+
+    project_id = scene.project_id
+    scene_number = scene.scene_number
+    prompt_text = scene.prompt
+    neg_text = scene.negative_prompt or ""
+
+    def run():
+        import random
+        import time as _t
+        from app.database import get_session, Scene as _Scene
+        session = get_session()
+        try:
+            images_dir = pipeline.config.paths.projects_dir / project_id / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            out = str(images_dir / f"scene_{scene_number:03d}_still_{int(_t.time())}.png")
+            # Free VRAM so Z-Image loads cleanly even if the video model is resident
+            try:
+                from app.services.comfyui_client import ComfyUIClient
+                ComfyUIClient().free_vram()
+            except Exception:
+                pass
+            res = pipeline.image_gen.generate(
+                prompt=prompt_text,
+                negative_prompt=neg_text,
+                output_path=out,
+                # Fresh random seed each regen — same seed + same prompt would
+                # reproduce the identical image the user is trying to replace.
+                seed=random.randint(0, 2**32 - 1),
+            )
+            sc = session.query(_Scene).get(scene_id)
+            n = dict(sc.director_notes or {})
+            n["pinned_still"] = res.path
+            n["still_regen"] = "done"
+            sc.director_notes = n
+            session.commit()
+            logger.info(f"[RegenImage] Scene {scene_number}: new still -> {res.path}")
+        except Exception as e:
+            logger.error(f"[RegenImage] Scene {scene_number} failed: {e}", exc_info=True)
+            try:
+                sc = session.query(_Scene).get(scene_id)
+                n = dict(sc.director_notes or {})
+                n["still_regen"] = f"failed: {e}"[:200]
+                sc.director_notes = n
+                session.commit()
+            except Exception:
+                pass
+        finally:
+            session.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started", "message": "Image regeneration started"}
 
 
 @app.post("/api/projects/{project_id}/resume")
@@ -808,6 +987,7 @@ def resume_project(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).get(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
     if project.status in (ProjectStatus.GENERATING, ProjectStatus.UPSCALING, ProjectStatus.ASSEMBLING):
         raise HTTPException(409, "Pipeline already running for this project")
 
@@ -827,6 +1007,7 @@ def full_auto(project_id: str, db: Session = Depends(get_db)):
     project = db.query(Project).get(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
 
     def run():
         try:
