@@ -32,6 +32,28 @@ class MusicResult:
     generation_time: float
 
 
+def _acestep_style_tags(style_prompt: str, condensed: str) -> str:
+    """ACE-Step 1.5 was trained on rich free-form captions — collapsing the
+    style prompt to HeartMuLa's sparse tag vocabulary throws away most of the
+    direction (genre nuance, choir, hooks, rhythm feel) and produces generic
+    songs. Pass the full comma-separated style prompt through, and only fall
+    back to the condensed tags when no style prompt exists."""
+    s = (style_prompt or "").strip().strip(",")
+    return s if s else condensed
+
+
+def _explicit_bpm(style_prompt: str, fallback: int) -> int:
+    """Honor an explicit 'NNN bpm' in the style prompt over the coarse
+    tempo-word buckets (which map 'upbeat' to 130 even when the author
+    asked for 100)."""
+    m = re.search(r"(\d{2,3})\s*bpm", (style_prompt or "").lower())
+    if m:
+        bpm = int(m.group(1))
+        if 40 <= bpm <= 220:
+            return bpm
+    return fallback
+
+
 def _parse_style_tags(style_prompt: str, channel_profile: dict = None) -> dict:
     """Extract structured fields from style prompt for HeartMuLa TagsBuilder.
 
@@ -239,7 +261,7 @@ class MusicGenService:
             instruments = ", ".join(music_cfg["instruments"])
             style_parts.append(f"instruments: {instruments}")
 
-        style_prompt = ". ".join(style_parts) if style_parts else "gentle background music"
+        style_prompt = ". ".join(style_parts) if style_parts else "upbeat background music, strong rhythm, highly enjoyable"
 
         lyrics = music_cfg.get("lyrics", "")
         instrumental = not bool(lyrics)
@@ -289,10 +311,10 @@ class MusicGenService:
             tag_parts.append("middle eastern")
         if "kids" in style_prompt.lower() or "children" in style_prompt.lower():
             tag_parts.append("children's music")
-        clean_tags = ", ".join(tag_parts)
+        clean_tags = _acestep_style_tags(style_prompt, ", ".join(tag_parts))
 
         bpm_map = {"very slow": 60, "slow": 75, "medium": 100, "fast": 130, "very fast": 160}
-        bpm = bpm_map.get(tags["tempo"], 100)
+        bpm = _explicit_bpm(style_prompt, bpm_map.get(tags["tempo"], 100))
 
         lang = "en"
         music_cfg = (channel_profile or {}).get("music", {})
@@ -349,11 +371,11 @@ class MusicGenService:
             tag_parts.append("middle eastern")
         if "kids" in style_prompt.lower() or "children" in style_prompt.lower():
             tag_parts.append("children's music")
-        clean_tags = ", ".join(tag_parts)
+        clean_tags = _acestep_style_tags(style_prompt, ", ".join(tag_parts))
 
         # Map tempo string to approximate BPM
         bpm_map = {"very slow": 60, "slow": 75, "medium": 100, "fast": 130, "very fast": 160}
-        bpm = bpm_map.get(tags["tempo"], 100)
+        bpm = _explicit_bpm(style_prompt, bpm_map.get(tags["tempo"], 100))
 
         # Detect language for lyrics
         lang = "en"

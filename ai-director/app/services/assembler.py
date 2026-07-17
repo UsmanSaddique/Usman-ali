@@ -199,10 +199,16 @@ class AssemblerService:
 
         filter_graph = ";\n".join(filter_parts)
 
+        # Windows caps a command line at ~32k chars; with 100+ clips the inline
+        # graph blows past it (WinError 206), so pass it as a script file.
+        filter_script = os.path.join(temp_dir, "filter_complex.txt")
+        with open(filter_script, "w", encoding="utf-8") as f:
+            f.write(filter_graph)
+
         cmd = [
             self.ffmpeg, "-y",
             *inputs,
-            "-filter_complex", filter_graph,
+            "-filter_complex_script", filter_script,
             "-map", "[vout]",
             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
             "-pix_fmt", "yuv420p",
@@ -210,7 +216,7 @@ class AssemblerService:
             output,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if result.returncode != 0:
             # Fallback: simple concat without transitions
             logger.warning(

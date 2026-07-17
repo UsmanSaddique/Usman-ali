@@ -139,6 +139,36 @@ class PipelineOrchestrator:
                 cb(self._progress)
             except Exception as e:
                 logger.warning(f"Progress callback error: {e}")
+        self._write_run_state()
+
+    def _write_run_state(self):
+        """Journal the live pipeline state to projects/<id>/run_state.json.
+        Written atomically on every progress tick, so after ANY crash / kill /
+        power loss the file shows exactly which phase+scene the run died in.
+        Best-effort: journaling must never break the pipeline itself."""
+        p = self._progress
+        if not p.project_id:
+            return
+        try:
+            import json
+            from datetime import datetime, timezone
+            pdir = self.config.paths.projects_dir / p.project_id
+            pdir.mkdir(parents=True, exist_ok=True)
+            state = {
+                "phase": getattr(p.phase, "value", str(p.phase)),
+                "current_scene": p.current_scene,
+                "total_scenes": p.total_scenes,
+                "percent": round(float(p.percent or 0), 1),
+                "message": p.message,
+                "error": p.error,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid(),
+            }
+            tmp = pdir / "run_state.json.tmp"
+            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            os.replace(tmp, pdir / "run_state.json")
+        except Exception:
+            pass
 
     def cancel(self):
         """Request cancellation of the current pipeline run."""
@@ -234,6 +264,10 @@ class PipelineOrchestrator:
                 "music_style": script.music_style,
                 "music_mood": script.music_mood,
                 "thumbnail_prompt": script.thumbnail_prompt,
+                # SEO block — consumed by metadata.json at render time
+                "description": script.description,
+                "tags": script.tags,
+                "hashtags": script.hashtags,
             })
             project.total_scenes = len(script.scenes)
             project.status = ProjectStatus.SCRIPTED
@@ -306,13 +340,59 @@ class PipelineOrchestrator:
                 raise ValueError("Project has no lyrics — paste lyrics or use the AI Director script instead")
 
             duration = float(project.duration_target)
+
+            # The video must cover the SONG, not the nominal target — when a
+            # music track is already selected, plan against its real length.
+            active_track = session.query(MusicTrack).filter(
+                MusicTrack.project_id == project_id,
+                MusicTrack.is_active == True,
+            ).first()
+            track_path = active_track.output_path if active_track else None
+            if active_track and (active_track.duration or 0) > 0 \
+                    and Path(track_path or "").exists():
+                duration = float(active_track.duration)
+                logger.info(f"[Pipeline] Planning scenes against the selected "
+                            f"song: {duration:.0f}s (target was {project.duration_target}s)")
+
             n = num_clips or project.num_scenes_target or max(1, int(duration // 5))
+            # Physical ceiling: a clip can't exceed max_num_frames/fps (5.04s
+            # on LTX), and the assembler overlaps each cut by
+            # transition_duration (0.5s crossfade) — so each extra clip only
+            # ADDS (cap - transition) seconds. Too few clips would silently
+            # render a shorter video; raise the count so the song is covered.
+            import math
+            cap = self._max_clip_seconds(project.video_model)
+            td = float(self.config.generation.transition_duration or 0)
+            min_n = max(1, math.ceil((duration - td) / max(cap - td, 1.0)))
+            if n < min_n:
+                logger.info(f"[Pipeline] Raising clip count {n} -> {min_n}: "
+                            f"{duration:.0f}s song / {cap:.2f}s clip ceiling "
+                            f"/ {td:.1f}s crossfade overlap per cut")
+                n = min_n
+            # Segments must SUM to duration + total crossfade overlap so the
+            # rendered (overlapped) video still spans the whole song.
+            plan_total = duration + max(0, n - 1) * td
             segments = parse_lyrics(
-                lyrics, duration,
+                lyrics, plan_total,
                 max_segments=n,
-                target_segment_sec=duration / n,
+                target_segment_sec=plan_total / n,
             )
+
             profile = self.director.load_channel_profile(project.channel.slug) or {}
+
+            # Lyric sync: snap scene boundaries to real vocal phrase onsets
+            # (faster-whisper, CPU). Best-effort — estimates kept on failure.
+            if track_path and Path(track_path).exists():
+                try:
+                    from app.services import lyric_sync
+                    synced = lyric_sync.sync_segments_to_audio(
+                        segments, track_path, max_clip_sec=cap,
+                        language=lyric_sync.whisper_language(
+                            profile.get("language", "")))
+                    if synced:
+                        segments = synced
+                except Exception as sync_err:
+                    logger.warning(f"[Pipeline] Lyric sync failed (using estimates): {sync_err}")
             prompts = lyric_scenes.build_prompts(segments, profile, project_id)
 
             session.query(Scene).filter(Scene.project_id == project_id).delete()
@@ -326,6 +406,9 @@ class PipelineOrchestrator:
                     duration=p["duration"],
                     camera_motion=p["camera_motion"],
                     narration_text="",   # the song carries the audio
+                    # keep the lyric line off narration (no TTS) but on record —
+                    # the render uses it to write the final .srt subtitle file
+                    director_notes={"lyric_text": p["narration_text"]},
                     status=SceneStatus.PENDING,
                 ))
             project.total_scenes = len(prompts)
@@ -405,6 +488,7 @@ class PipelineOrchestrator:
 
     def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None, batch: bool = False, upscale_inline: bool = False):
         with self._exclusive("generation"):
+            self._progress.project_id = project_id  # run_state.json journal target
             return self._start_generation_impl(
                 project_id, scene_ids=scene_ids, width=width, height=height,
                 batch=batch, upscale_inline=upscale_inline)
@@ -497,6 +581,10 @@ class PipelineOrchestrator:
                     width=width, height=height,
                 )
 
+            # Premium opening: scenes starting inside the first N seconds of
+            # the video get higher resolution + more steps (see config.video).
+            premium_ids = self._premium_scene_ids(session, project_id)
+
             for i, scene in enumerate(scenes):
                 self._check_cancel()
                 self._check_pause()
@@ -513,9 +601,21 @@ class PipelineOrchestrator:
 
                 t0 = time.time()
 
+                is_premium = scene.id in premium_ids
+                vc = self.config.video
+                s_width = vc.premium_width if is_premium else width
+                s_height = vc.premium_height if is_premium else height
+                s_steps = vc.premium_steps if is_premium else None
+                if is_premium:
+                    logger.info(
+                        f"[Pipeline] Scene {scene.scene_number}: PREMIUM OPENING "
+                        f"quality — {s_width}x{s_height} @ {s_steps} steps "
+                        f"(slower on purpose; the hook must look best)")
+
                 try:
                     generation = self._generate_scene(
-                        scene, clips_dir, images_dir, session, width=width, height=height
+                        scene, clips_dir, images_dir, session,
+                        width=s_width, height=s_height, steps=s_steps,
                     )
 
                     # QA gate: reject truncated/unreadable/static clips so the
@@ -557,7 +657,8 @@ class PipelineOrchestrator:
                         self._check_cancel()
                         scene.retry_count += 1
                         try:
-                            self._retry_scene_direct(scene, err, clips_dir, images_dir, session, width=width, height=height)
+                            self._retry_scene_direct(scene, err, clips_dir, images_dir, session,
+                                                     width=s_width, height=s_height)
                             project.completed_scenes = i + 1
                             break
                         except Exception as retry_err:
@@ -834,7 +935,9 @@ class PipelineOrchestrator:
         logger.info(f"[Pipeline] ── Stills phase complete: {n_ok}/{len(scenes)} ──")
 
     def _generate_scene(
-        self, scene: Scene, clips_dir: Path, images_dir: Path, session, width: Optional[int] = None, height: Optional[int] = None
+        self, scene: Scene, clips_dir: Path, images_dir: Path, session,
+        width: Optional[int] = None, height: Optional[int] = None,
+        steps: Optional[int] = None,
     ) -> Generation:
         """Generate a single scene based on its type."""
         version = len(scene.generations) + 1
@@ -899,6 +1002,7 @@ class PipelineOrchestrator:
                     loras=scene_loras or None,
                     width=width,
                     height=height,
+                    steps=steps,
                     seed=scene_seed,
                     clear_vram_first=clear_vram,
                 )
@@ -910,6 +1014,7 @@ class PipelineOrchestrator:
                 gen.parameters = {
                     "width": result.width, "height": result.height,
                     "num_frames": result.num_frames, "fps": result.fps,
+                    "steps": steps,
                 }
 
             elif scene.scene_type == SceneType.IMG2VID:
@@ -925,6 +1030,7 @@ class PipelineOrchestrator:
                         loras=scene_loras or None,
                         width=width,
                         height=height,
+                        steps=steps,
                         seed=scene_seed,
                         clear_vram_first=clear_vram,
                     )
@@ -936,6 +1042,7 @@ class PipelineOrchestrator:
                     gen.parameters = {
                         "width": result.width, "height": result.height,
                         "num_frames": result.num_frames, "fps": result.fps,
+                        "steps": steps,
                     }
                 else:
                     # A user-pinned still (regenerated via the wizard) always
@@ -988,6 +1095,7 @@ class PipelineOrchestrator:
                         loras=scene_loras or None,
                         width=width,
                         height=height,
+                        steps=steps,
                         seed=scene_seed,
                         clear_vram_first=need_vram_free,
                     )
@@ -998,6 +1106,12 @@ class PipelineOrchestrator:
 
                 gen.output_path = result.path
                 gen.seed = result.seed
+                if not gen.parameters:
+                    gen.parameters = {
+                        "width": result.width, "height": result.height,
+                        "num_frames": result.num_frames, "fps": result.fps,
+                        "steps": steps,
+                    }
                 if not gen.generation_time_sec:
                     gen.generation_time_sec = result.generation_time
 
@@ -1014,6 +1128,7 @@ class PipelineOrchestrator:
                         loras=scene_loras or None,
                         width=width,
                         height=height,
+                        steps=steps,
                         seed=scene_seed,
                         clear_vram_first=clear_vram,
                     )
@@ -1078,6 +1193,356 @@ class PipelineOrchestrator:
 
         return gen
 
+    # ── Release assets: metadata.json + thumbnail ──────────────────────
+
+    def _write_lyrics_srt(self, project, project_dir: Path,
+                          cues: list[tuple[float, str]],
+                          total_duration: float) -> Optional[Path]:
+        """Write final_render.srt: the lyric line each scene was cut on, timed
+        on the RENDERED timeline (each cut overlaps by the crossfade, so clip
+        starts shift earlier the deeper into the video they are). Scenes that
+        predate lyric_text director notes fall back to re-parsing the project
+        lyrics onto the clip plan. Returns the .srt path, or None (no lyrics)."""
+        if not cues or not (project.lyrics or "").strip():
+            return None
+
+        if not any(text for _, text in cues):
+            cues = self._cues_from_lyrics(project.lyrics, [d for d, _ in cues])
+            if not cues:
+                return None
+
+        td = float(self.config.generation.transition_duration or 0)
+        starts = []
+        t = 0.0
+        for i, (dur, _) in enumerate(cues):
+            starts.append(max(0.0, t - i * td))
+            t += dur
+        video_end = float(total_duration or 0) or \
+            max(0.0, t - max(0, len(cues) - 1) * td)
+
+        # A long lyric line is split across several clips (same text) — merge
+        # those runs into one cue so the subtitle doesn't blink.
+        entries: list[tuple[float, float, str]] = []
+        for i, (dur, text) in enumerate(cues):
+            text = text.strip()
+            end = starts[i + 1] if i + 1 < len(starts) else video_end
+            if entries and entries[-1][2] == text:
+                entries[-1] = (entries[-1][0], end, text)
+            else:
+                entries.append((starts[i], end, text))
+
+        def ts(sec: float) -> str:
+            ms = int(round(max(0.0, min(sec, video_end)) * 1000))
+            h, rem = divmod(ms, 3600000)
+            m, rem = divmod(rem, 60000)
+            s, ms = divmod(rem, 1000)
+            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+        blocks = []
+        for start, end, text in entries:
+            if not text or text == "(instrumental)" or end <= start:
+                continue
+            blocks.append(f"{len(blocks) + 1}\n{ts(start)} --> {ts(end)}\n{text}\n")
+        if not blocks:
+            return None
+        srt_path = project_dir / "final_render.srt"
+        srt_path.write_text("\n".join(blocks), encoding="utf-8")
+        logger.info(f"[Release] lyrics subtitles: {srt_path} ({len(blocks)} cues)")
+        return srt_path
+
+    def _cues_from_lyrics(self, lyrics: str,
+                          durations: list[float]) -> list[tuple[float, str]]:
+        """Rebuild (duration, lyric line) for scene lists created before
+        lyric_text was recorded: parse the lyrics across the clip plan and give
+        each clip the segment under its midpoint."""
+        from app.services.lyrics_parser import parse_lyrics
+        total = sum(durations)
+        if total <= 0:
+            return []
+        segments = parse_lyrics(lyrics, total, max_segments=len(durations),
+                                target_segment_sec=total / len(durations))
+        if not segments:
+            return []
+        cues = []
+        t = 0.0
+        for dur in durations:
+            mid = t + dur / 2
+            seg = next((s for s in segments
+                        if s.start_sec <= mid < s.end_sec), segments[-1])
+            cues.append((dur, "" if seg.is_instrumental else seg.text))
+            t += dur
+        return cues
+
+    def _write_release_assets(self, project, project_dir: Path, video_path: str,
+                              duration: float, resolution: str):
+        """Make every render upload-ready: metadata.json (title/description/
+        tags/hashtags/made_for_kids) + an auto-picked thumbnail.jpg next to
+        the final video. Best-effort — never fails the render."""
+        import json
+
+        # ── metadata.json ────────────────────────────────────────────────
+        try:
+            seo = {}
+            try:
+                seo = json.loads(project.script_raw or "{}") or {}
+            except Exception:
+                pass
+            profile = self.director.load_channel_profile(project.channel.slug) or {}
+
+            tags = list(seo.get("tags") or [])
+            if not tags:
+                themes = profile.get("seo_themes") or []
+                if isinstance(themes, str):
+                    themes = [themes]
+                tags = [t.strip() for th in themes for t in str(th).split(",") if t.strip()]
+            hashtags = list(seo.get("hashtags") or [])
+
+            description = (seo.get("description") or "").strip()
+            if not description:
+                # Song / no-LLM projects: synthesize a serviceable description
+                hook = (project.context or "").strip()
+                first_lines = "\n".join(
+                    l.strip() for l in (project.lyrics or "").splitlines()
+                    if l.strip() and not l.strip().startswith("[")
+                )[:200]
+                parts = [project.title, hook or None, first_lines or None,
+                         " ".join(hashtags) or None]
+                description = "\n\n".join(p for p in parts if p)
+
+            metadata = {
+                "title": project.title,
+                "description": description,
+                "tags": tags[:30],
+                "hashtags": hashtags,
+                "made_for_kids": bool(getattr(project.channel, "made_for_kids", True)),
+                "channel": project.channel.slug,
+                "language": profile.get("language", ""),
+                "duration_sec": round(float(duration), 1),
+                "resolution": resolution,
+                "video_file": str(video_path),
+                "thumbnail_file": str(project_dir / "thumbnail.jpg"),
+            }
+            srt_file = project_dir / "final_render.srt"
+            if srt_file.exists():
+                metadata["subtitles_file"] = str(srt_file)
+            meta_path = project_dir / "metadata.json"
+            meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False),
+                                 encoding="utf-8")
+            logger.info(f"[Release] metadata.json written: {meta_path}")
+        except Exception as e:
+            logger.warning(f"[Release] metadata.json failed (non-fatal): {e}")
+
+        # ── thumbnail.jpg — sharpest, most colorful frame wins ──────────
+        try:
+            thumb = self._pick_thumbnail(video_path, project_dir, duration)
+            if thumb:
+                project.thumbnail_path = str(thumb)
+                logger.info(f"[Release] thumbnail: {thumb}")
+        except Exception as e:
+            logger.warning(f"[Release] thumbnail failed (non-fatal): {e}")
+
+    def _pick_thumbnail(self, video_path: str, project_dir: Path,
+                        duration: float) -> Optional[Path]:
+        """Sample frames across the video, score sharpness x colorfulness,
+        save the winner as a 1280x720 thumbnail.jpg (CTR beats randomness)."""
+        import subprocess
+        import tempfile
+        from PIL import Image, ImageFilter, ImageStat
+
+        dur = max(float(duration or 0), 2.0)
+        # skip the first/last 5%: fade-ins and end cards make bad thumbnails
+        points = [dur * f for f in (0.15, 0.3, 0.45, 0.6, 0.75, 0.9)]
+        best, best_score = None, -1.0
+        with tempfile.TemporaryDirectory() as td:
+            for i, t in enumerate(points):
+                frame = Path(td) / f"cand_{i}.png"
+                cmd = [self.config.paths.ffmpeg_bin, "-y", "-ss", f"{t:.2f}",
+                       "-i", str(video_path), "-frames:v", "1",
+                       "-vf", "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
+                       str(frame)]
+                try:
+                    subprocess.run(cmd, capture_output=True, timeout=60)
+                except Exception:
+                    continue
+                if not frame.exists():
+                    continue
+                try:
+                    img = Image.open(frame).convert("RGB")
+                    # sharpness: edge energy; colorfulness: channel stddev
+                    edges = ImageStat.Stat(img.convert("L").filter(ImageFilter.FIND_EDGES))
+                    sharp = edges.stddev[0]
+                    color = sum(ImageStat.Stat(img).stddev) / 3.0
+                    score = sharp * 0.7 + color * 0.3
+                    if score > best_score:
+                        best_score = score
+                        best = img.copy()
+                except Exception:
+                    continue
+        if best is None:
+            return None
+        out = project_dir / "thumbnail.jpg"
+        best.save(out, "JPEG", quality=92)
+        return out
+
+    def write_production_report(self, session, project, project_dir: Path,
+                                render_info: Optional[dict] = None) -> Optional[dict]:
+        """Emit production_report.json + report.md: what was generated, at what
+        resolution/steps, how long every phase took. Best-effort, never fatal.
+        Callable standalone for backfilling old projects."""
+        import json
+        from datetime import datetime
+        try:
+            scenes = session.query(Scene).filter(
+                Scene.project_id == project.id).order_by(Scene.scene_number).all()
+            gens = [s.active_generation for s in scenes if s.active_generation]
+
+            # Clip generation stats grouped by resolution+steps profile
+            profiles: dict = {}
+            gpu_clip_total = 0.0
+            for g in gens:
+                p = g.parameters or {}
+                key = f"{p.get('width', '?')}x{p.get('height', '?')} @ {p.get('steps') or 'default'} steps"
+                t = float(g.generation_time_sec or 0)
+                gpu_clip_total += t
+                b = profiles.setdefault(key, {"clips": 0, "total_sec": 0.0})
+                b["clips"] += 1
+                b["total_sec"] += t
+            for b in profiles.values():
+                b["avg_sec_per_clip"] = round(b["total_sec"] / max(b["clips"], 1), 1)
+                b["total_sec"] = round(b["total_sec"], 1)
+
+            # Upscale phase span from output file mtimes (not tracked in DB)
+            upscale = {}
+            up_files = [g.upscaled_path for g in gens
+                        if g.upscaled_path and g.upscaled_path != g.output_path
+                        and Path(g.upscaled_path).exists()]
+            if up_files:
+                mtimes = [Path(f).stat().st_mtime for f in up_files]
+                upscale = {
+                    "clips_upscaled": len(up_files),
+                    "wall_clock_sec": round(max(mtimes) - min(mtimes), 0),
+                }
+
+            # Music
+            tracks = session.query(MusicTrack).filter(
+                MusicTrack.project_id == project.id).all()
+            active = next((t for t in tracks if t.is_active), None)
+
+            # Render info (passed live, or recovered from the last render job)
+            if not render_info:
+                rj = session.query(RenderJob).filter(
+                    RenderJob.project_id == project.id,
+                    RenderJob.status == RenderStatus.COMPLETED,
+                ).order_by(RenderJob.created_at.desc()).first()
+                render_info = dict(rj.render_settings or {}) if rj else {}
+                if rj:
+                    render_info["resolution"] = rj.resolution
+
+            wall_total = None
+            try:
+                wall_total = round(
+                    (project.updated_at - project.created_at).total_seconds(), 0)
+            except Exception:
+                pass
+
+            report = {
+                "title": project.title,
+                "project_id": project.id,
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "final_video": {
+                    "path": project.output_path,
+                    "duration_sec": render_info.get("total_duration"),
+                    "file_size_mb": render_info.get("file_size_mb"),
+                    "resolution": render_info.get("resolution", "1080p"),
+                    "render_time_sec": render_info.get("render_time"),
+                },
+                "totals": {
+                    "wall_clock_create_to_done_sec": wall_total,
+                    "gpu_clip_generation_sec": round(gpu_clip_total, 0),
+                    "scenes": len(scenes),
+                    "clips_generated": len(gens),
+                    "avg_sec_per_clip": round(gpu_clip_total / max(len(gens), 1), 1),
+                },
+                "generation_profiles": profiles,
+                "video_model": getattr(project, "video_model", None),
+                "upscale": upscale,
+                "music": {
+                    "variants_generated": len(tracks),
+                    "selected_duration_sec": active.duration if active else None,
+                },
+            }
+            (project_dir / "production_report.json").write_text(
+                json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            def hm(sec):
+                if sec is None:
+                    return "n/a"
+                sec = int(sec)
+                return f"{sec // 3600}h {sec % 3600 // 60:02d}m {sec % 60:02d}s"
+
+            lines = [
+                f"# Production Report — {project.title}", "",
+                f"**Final video:** {render_info.get('total_duration', 0):.0f}s, "
+                f"{render_info.get('resolution', '1080p')}, "
+                f"{render_info.get('file_size_mb', 0):.0f}MB "
+                f"(render {hm(render_info.get('render_time'))})", "",
+                f"- Total wall clock (create → done): **{hm(wall_total)}**",
+                f"- GPU clip generation: **{hm(gpu_clip_total)}** over "
+                f"{len(gens)} clips (avg {report['totals']['avg_sec_per_clip']}s/clip)",
+                f"- Video model: `{report['video_model']}`", "",
+                "## Clip profiles (resolution @ steps)", "",
+            ]
+            for key, b in profiles.items():
+                lines.append(f"- **{key}** — {b['clips']} clips, "
+                             f"avg {b['avg_sec_per_clip']}s/clip ({hm(b['total_sec'])} total)")
+            if upscale:
+                lines += ["", "## Upscale",
+                          f"- {upscale['clips_upscaled']} clips upscaled in "
+                          f"~{hm(upscale['wall_clock_sec'])} (wall clock)"]
+            lines += ["", "## Music",
+                      f"- {len(tracks)} variants generated; selected track "
+                      f"{active.duration if active else '?'}s"]
+            (project_dir / "report.md").write_text(
+                "\n".join(lines), encoding="utf-8")
+            logger.info(f"[Release] production report written: {project_dir / 'report.md'}")
+            return report
+        except Exception as e:
+            logger.warning(f"[Release] production report failed (non-fatal): {e}")
+            return None
+
+    def _premium_scene_ids(self, session, project_id: str) -> set[str]:
+        """Scene ids whose START falls inside the premium-opening window
+        (config.video.premium_open_seconds). Computed over the FULL project
+        timeline so a resume run classifies scenes the same way."""
+        pw = float(getattr(self.config.video, "premium_open_seconds", 0) or 0)
+        if pw <= 0:
+            return set()
+        all_scenes = session.query(Scene).filter(
+            Scene.project_id == project_id
+        ).order_by(Scene.scene_number).all()
+        ids: set[str] = set()
+        t = 0.0
+        for s in all_scenes:
+            if t < pw:
+                ids.add(s.id)
+            t += float(s.duration or 4.0)
+        return ids
+
+    def _max_clip_seconds(self, video_model: Optional[str]) -> float:
+        """Longest clip the video model can physically render — the largest
+        8n+1 frame count within max_num_frames, at the model family's fps
+        (121f @ 24fps = 5.04s for LTX). Scene durations above this silently
+        render at the cap, so planners must respect it."""
+        from app.services.comfyui_client import get_defaults_for_model
+        try:
+            fps = int(get_defaults_for_model(video_model or "").get("fps")
+                      or self.config.video.default_fps)
+        except Exception:
+            fps = int(self.config.video.default_fps)
+        max_frames = int(getattr(self.config.video, "max_num_frames", 97))
+        frames = ((max_frames - 1) // 8) * 8 + 1
+        return frames / max(fps, 1)
+
     def _plan_video_params(self, scene: Scene, video_model: str) -> tuple[int, int, float]:
         """Return (num_frames, fps, actual_clip_duration) for a scene.
 
@@ -1085,18 +1550,26 @@ class PipelineOrchestrator:
         default), otherwise clips come out shorter than scene.duration:
         64 frames computed at config's 16fps but encoded at 24fps gave 2.67s
         clips for 4.0s scenes, which also corrupted crossfade offsets at
-        assembly. Frames are capped at 97 — the measured VRAM-safe ceiling
-        for LTX-22B at 832x480 on the 16GB card.
+        assembly. Frames are capped at config.video.max_num_frames — the
+        bench-measured VRAM-safe ceiling for LTX-22B at 832x480 on 16GB.
         """
         from app.services.comfyui_client import get_defaults_for_model
         fps = int(get_defaults_for_model(video_model).get("fps")
                   or self.config.video.default_fps)
-        num_frames = min(int(float(scene.duration or 4.0) * fps), 97)
+        max_frames = int(getattr(self.config.video, "max_num_frames", 97))
+        num_frames = min(int(float(scene.duration or 4.0) * fps), max_frames)
         # LTX only generates 8n+1 frame counts and silently rounds DOWN —
         # requesting 96 yielded 89 frames (3.71s clips for 4.0s scenes, a
         # 15s shortfall across a 50-clip video). Snap UP to the next 8n+1.
-        num_frames = min(((num_frames - 1 + 7) // 8) * 8 + 1, 97)
-        return num_frames, fps, num_frames / fps
+        num_frames = min(((num_frames - 1 + 7) // 8) * 8 + 1, max_frames)
+        planned = num_frames / fps
+        want = float(scene.duration or 4.0)
+        if want - planned > 0.25:
+            logger.warning(
+                f"[Pipeline] Scene {scene.scene_number}: {want:.1f}s requested but "
+                f"frame cap renders {planned:.2f}s — plan more/shorter scenes "
+                f"(ceiling {self._max_clip_seconds(video_model):.2f}s/clip)")
+        return num_frames, fps, planned
 
     def _qa_gate(self, scene: Scene, generation) -> None:
         """Reject truncated/unreadable/static clips — raises RuntimeError so
@@ -1207,6 +1680,7 @@ class PipelineOrchestrator:
 
     def start_upscale(self, project_id: str):
         with self._exclusive("upscale"):
+            self._progress.project_id = project_id  # run_state.json journal target
             return self._start_upscale_impl(project_id)
 
     def _start_upscale_impl(self, project_id: str):
@@ -1470,7 +1944,7 @@ class PipelineOrchestrator:
                 )
             else:
                 result = self.music_gen.generate(
-                    style_prompt="gentle background music, instrumental",
+                    style_prompt="upbeat background music, strong rhythm, highly enjoyable, instrumental",
                     duration=project.duration_target + 5,
                     output_path=music_path,
                     instrumental=True,
@@ -1522,6 +1996,21 @@ class PipelineOrchestrator:
     ]
 
     def generate_music_variants(
+        self,
+        project_id: str,
+        count: int = 10,
+        style: Optional[str] = None,
+        lyrics: Optional[str] = None,
+        engine: Optional[str] = None,
+        vocals: Optional[bool] = None,
+        offset: int = 0,
+    ) -> list[str]:
+        with self._exclusive("music"):
+            return self._generate_music_variants_impl(
+                project_id, count=count, style=style, lyrics=lyrics,
+                engine=engine, vocals=vocals, offset=offset)
+
+    def _generate_music_variants_impl(
         self,
         project_id: str,
         count: int = 10,
@@ -1633,6 +2122,7 @@ class PipelineOrchestrator:
         resolution: Optional[str] = None,
     ):
         with self._exclusive("render"):
+            self._progress.project_id = project_id  # run_state.json journal target
             return self._render_impl(project_id, narration_path, music_path, resolution)
 
     def _render_impl(
@@ -1668,6 +2158,7 @@ class PipelineOrchestrator:
 
             # Build clip list — prefer upscaled, fall back to raw
             clips = []
+            lyric_cues = []  # (planned duration, lyric line) per assembled clip
             for scene in scenes:
                 gen = scene.active_generation
                 if not gen:
@@ -1681,6 +2172,8 @@ class PipelineOrchestrator:
                         transition_in=notes.get("transition_in", "crossfade"),
                         transition_out=notes.get("transition_out", "crossfade"),
                     ))
+                    lyric_cues.append((float(scene.duration or 0),
+                                       str(notes.get("lyric_text") or "")))
 
             if not clips:
                 raise ValueError("No clips available for assembly")
@@ -1749,6 +2242,27 @@ class PipelineOrchestrator:
             except Exception as qa_err:
                 logger.warning(f"[QA] final check failed (non-fatal): {qa_err}")
 
+            # Lyrics subtitle file (.srt) next to the final video — song
+            # projects only; best-effort, never fails the render.
+            try:
+                self._write_lyrics_srt(project, project_dir, lyric_cues,
+                                       result.total_duration)
+            except Exception as srt_err:
+                logger.warning(f"[Release] lyrics .srt failed (non-fatal): {srt_err}")
+
+            # Upload-ready assets: metadata.json + auto-picked thumbnail.jpg
+            self._write_release_assets(
+                project, project_dir, result.output_path,
+                result.total_duration, out_resolution)
+
+            # Production report: what was made, at what quality, in how long
+            self.write_production_report(session, project, project_dir, {
+                "total_duration": result.total_duration,
+                "file_size_mb": result.file_size_mb,
+                "render_time": result.render_time,
+                "resolution": out_resolution,
+            })
+
             session.commit()
 
             self._emit_progress(
@@ -1804,6 +2318,7 @@ class PipelineOrchestrator:
         narration_path: Optional[str] = None,
     ):
         with self._exclusive("full-auto"):
+            self._progress.project_id = project_id  # run_state.json journal target
             return self._run_full_auto_impl(project_id, narration_path)
 
     def _run_full_auto_impl(
@@ -1878,10 +2393,17 @@ class PipelineOrchestrator:
                 ).order_by(Scene.scene_number).all()
                 profile = self.director.load_channel_profile(project.channel.slug) or {}
                 lo, hi = self.config.generation.clip_duration_range
+                # Crossfades overlap clips by transition_duration per cut, so
+                # scene durations must sum PAST the target by that overlap for
+                # the rendered video to actually hit the target length.
+                td = float(self.config.generation.transition_duration or 0)
+                lint_target = float(project.duration_target) \
+                    + max(0, len(scenes) - 1) * td
                 if scenes:
-                    lo = min(lo, float(project.duration_target) / len(scenes))
+                    lo = min(lo, lint_target / len(scenes))
                 self._qa_notes["lint"] = qa_svc.lint_script(
-                    scenes, profile, float(project.duration_target), (lo, hi))
+                    scenes, profile, lint_target, (lo, hi),
+                    video_clip_cap=self._max_clip_seconds(project.video_model))
                 session.commit()
                 session.close()
             except Exception as lint_err:

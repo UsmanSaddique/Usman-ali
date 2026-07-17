@@ -1,0 +1,83 @@
+name: "Gullu Ka Gaon"
+slug: "gullu-ka-gaon"
+language: "Roman Urdu"   # narration/titles in Latin-script Urdu; visual prompts always English
+made_for_kids: true
+target_audience: "Kids 4-10 + families, Urdu/Hindi speaking (South Asia + diaspora) — comedy-first, watch-together content"
+inspired_by: "The comedy-engine formula of top funny animation channels (flawed hero + deadpan sidekick + running gags) — original characters, NOT a clone of any channel"
+vibe: "Loud, silly, fast, warm — slapstick village comedy where the plan ALWAYS backfires and friendship always fixes it"
+
+# ── Format / episode structure (the comedy engine) ──────────────────────────
+format: "Character-driven slapstick comedy episode: Gullu's grand scheme of the day spectacularly backfires"
+episode_structure:
+  - "COLD OPEN HOOK: start mid-chaos or on Gullu's most ridiculous confident pose + one funny narration line teasing today's scheme"
+  - "BIG CLAIM: Gullu announces today's genius plan with maximum drama ('Tension not! Gullu hai na!')"
+  - "WARNING: Professor Choozah deadpans why it won't work ('Scientifically speaking... bura idea hai.') — Gullu ignores him"
+  - "THE PLAN: Gullu and Bhola build/attempt the scheme; Bhola misunderstands one instruction literally"
+  - "ESCALATION: small success, Gullu gets cocky, doubles down; Kaalu the crow sneaks in to steal the idea"
+  - "BACKFIRE: the spectacular, harmless slapstick collapse — the biggest visual moment of the episode (thumbnail frame lives here)"
+  - "RESCUE: Professor Choozah's tiny smart fix saves everyone; Kaalu's copycat scheme fails even worse"
+  - "TAG: friends laugh together, Gullu dramatically faints when proven wrong, then instantly announces NEXT episode's scheme (cliffhanger gag)"
+
+# ── Characters: 4 color-coded animals, ONE flaw each (repeat EXACT descriptors every scene) ──
+character_system: "Fixed 4-character cast. Gullu appears in EVERY episode; use 1-2 supporting characters per episode. Repeat the EXACT descriptor strings below in every scene prompt for consistency."
+character_bible:
+  - "Gullu (HERO, in every episode): a chubby white cartoon goat with small curved horns, a bright red waistcoat with gold buttons, and a tiny golden bell on his neck — overconfident, dramatic, self-declared genius; big expressive eyebrows"
+  - "Professor Choozah (the brain): a tiny fluffy yellow baby chick wearing big round black glasses — deadpan, serious face, always calm; comically small next to everyone"
+  - "Bhola (the muscle/heart): a huge gentle grey cartoon buffalo calf with a green flat cap and a happy innocent smile — slow, sweet, takes everything literally, loves eating"
+  - "Kaalu (the rival, occasional): a skinny sly black cartoon crow with a purple waistcoat and a scheming grin — copies Gullu's plans and fails worse"
+
+# ── Visual identity (identical across all videos = brand recognition) ────────
+art_style_phrase: "vibrant 3D cartoon render, exaggerated squash-and-stretch poses, big expressive cartoon eyes, bold saturated colors, comedy animation style"
+color_palette: "punchy and warm — mustard yellow, brick red, sky blue, leafy green; village bazaar colors, always bright and sunny"
+visual_style:
+  - "Always stylized 3D cartoon — NEVER photorealistic"
+  - "EXAGGERATION IS THE STYLE: huge reactions, wide eyes, dramatic poses, mid-action freeze frames"
+  - "Setting is a colorful Pakistani/South Asian village bazaar: small shops, hand-painted signs-free walls, fruit carts, dusty lanes, string lights"
+  - "One clear character action per frame — comedy must read WITHOUT dialogue (visual gag first)"
+  - "Repeat the art_style_phrase and the character's exact descriptors in EVERY prompt"
+negative_prompt_additions: "photorealistic, realistic human, human face, hands, fingers, text, letters, signage text, watermark, scary, dark, violent, injury, blood, deformed, extra limbs, blurry, low quality, fast motion, rapid jerky movement, motion blur, flickering, chaotic camera shake"
+still_ratio: 0.0   # every scene is a real animated clip
+scene_type_directive: "Use scene_type 'img2vid' for EVERY scene: generate a consistent still then animate it with LTX. Each prompt MUST describe ONE funny PHYSICAL ACTION performed at SLOW-TO-MEDIUM pace (wobbling, slowly tipping over, gentle tumbling, careful balancing, drifting, dramatic slow faint, slow proud strutting) plus soft ambient motion (drifting dust, swaying flags, floating sparkles). NEVER fast/rapid action — local video models fumble fast motion into warped limbs; slow deliberate movement reads clean AND is funnier (slow-motion comedy)."
+
+# ── Comedy rules (what makes it funny, not mean) ─────────────────────────────
+humor_rules:
+  - "Slapstick without harm: collapses, splats, chases, wobbles — nobody gets hurt, everyone is fine next shot"
+  - "Never mock identity, poverty, appearance, or faith — the joke is ALWAYS Gullu's overconfidence or a literal misunderstanding"
+  - "Running gags every episode: Gullu's catchphrase before disaster; Choozah's 'Scientifically speaking...'; Bhola eating a key object; Gullu's dramatic faint"
+  - "Light moral allowed in the tag (teamwork, listening to friends) but NEVER preachy — comedy first"
+
+# ── Narration ────────────────────────────────────────────────────────────────
+narration:
+  language: "Roman Urdu"
+  voice: "energetic playful male storyteller, comic timing, mock-serious drama"
+  pace: "fast and punchy; pause right before every backfire for comic beat"
+  style: "simple funny Roman Urdu; short punchy lines; narrator gently roasts Gullu ('Gullu ko laga woh genius hai... Gullu ghalat tha.')"
+
+# ── Music ────────────────────────────────────────────────────────────────────
+music:
+  style: "funny upbeat cartoon comedy music, dhol and tabla groove, bouncy ukulele, playful flute runs, comedic stops and stings, strong rhythm"
+  mood: "mischievous, energetic, bouncy, highly enjoyable"
+  tempo: "fast (110-130 bpm) with comedic pauses"
+
+# ── Titles & SEO ─────────────────────────────────────────────────────────────
+title_formulas:
+  - "Gullu ne {ridiculous scheme} 😂 — e.g. 'Gullu ne banayi Ice Cream Factory 🍦😂 | Funny Cartoon Urdu'"
+  - "Scheme + disaster tease + laughing emoji, Roman Urdu, short English search tail ('Funny Cartoon for Kids')"
+  - "Series branding: every title starts with 'Gullu' — the name IS the brand"
+seo_themes:
+  - "funny cartoon urdu, comedy cartoon for kids, gullu, bakra cartoon, funny animals, urdu kahani funny, kids comedy, cartoon in urdu hindi, village comedy, funny goat"
+
+# ── Local-AI generation presets (verified 16GB-safe) ─────────────────────────
+generation:
+  target_resolution: "1080p"          # final, after ESRGAN upscale
+  video_base: "832x480"               # VRAM-safe base, ~1 min/clip; upscaled to 1080p
+  clip_seconds: [3, 4]                # short punchy comedy cuts (97-frame LTX cap)
+  prefer: "img2vid for every scene; lock seed per project"
+  video_model: "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+  default_loras: []
+
+avoid:
+  - "human faces or close-up humans"
+  - "real injury, crying without comedy resolution, fear, anything mean-spirited"
+  - "text rendered inside the frame (hand-painted signs must be textless)"
+  - "more than 2 characters interacting in a single clip (consistency killer)"

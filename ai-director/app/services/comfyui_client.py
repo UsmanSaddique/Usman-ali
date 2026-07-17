@@ -985,9 +985,12 @@ def build_acestep15xl_workflow(
             "language": language,
             "keyscale": keyscale,
             "generate_audio_codes": True,
-            "cfg_scale": 2.0,
-            "temperature": 0.85,
-            "top_p": 0.9,
+            # Audio-codes LLM guidance: higher cfg + lower temperature makes
+            # the 1.7B code model track the written lyrics more confidently —
+            # noticeably clearer sung words (defaults 2.0/0.85 bury vocals).
+            "cfg_scale": 2.5,
+            "temperature": 0.75,
+            "top_p": 0.85,
             "top_k": 0,
             "min_p": 0.0,
         }},
@@ -1044,9 +1047,12 @@ def build_acestep15xl_sft_workflow(
             "language": language,
             "keyscale": keyscale,
             "generate_audio_codes": True,
-            "cfg_scale": 2.0,
-            "temperature": 0.85,
-            "top_p": 0.9,
+            # Audio-codes LLM guidance: higher cfg + lower temperature makes
+            # the 1.7B code model track the written lyrics more confidently —
+            # noticeably clearer sung words (defaults 2.0/0.85 bury vocals).
+            "cfg_scale": 2.5,
+            "temperature": 0.75,
+            "top_p": 0.85,
             "top_k": 0,
             "min_p": 0.0,
         }},

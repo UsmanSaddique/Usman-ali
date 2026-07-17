@@ -1,74 +1,122 @@
 # AI Director — Improvement Plan
-_Created 2026-07-05. Goal: "describe ideas → wake up to finished, SEO'd, uploadable videos" with zero babysitting._
+_Updated 2026-07-15. Goal: "describe ideas → wake up to finished, SEO'd, uploadable videos" with zero babysitting._
 
-Priorities are ordered by value toward that goal on the current hardware
-(RTX 5070 Ti 16GB, 64GB RAM, i5-14400F — pipeline is already tuned to this; nothing here needs new hardware).
-
----
-
-## Tier 1 — Reliability for unattended overnight runs (do first)
-
-The pipeline works, but one hang at 1am currently kills the whole night. These make it survive alone.
-
-### 1.1 Overnight batch runner with a watchdog
-- New `overnight_runner.py`: reads a queue of jobs (song configs / video ideas from a YAML or `jobs/` folder), runs them sequentially via the existing `run_pipeline()` / `run_full_auto`.
-- **Watchdog:** per-phase hard timeouts; if ComfyUI stops responding or a job exceeds its budget → cancel ComfyUI queue, `POST /free`, restart the ComfyUI process, resume from checkpoint (checkpointing already exists — this is the missing half).
-- On startup: clear any zombie ComfyUI queue entries (known issue: zombie jobs survive client kills and spill VRAM).
-- End-of-night `report.md`: per-job status, timings, output paths, failures.
-- Windows Task Scheduler entry (or `schtasks` script) to launch it nightly at a set hour.
-
-### 1.2 Make script/prompt generation crash-proof
-- The intermittent Qwen `'NoneType' object has no attribute 'n_tokens'` crash (STATUS.md known bug) is fatal for unattended runs. Add retry-once-then-fallback: LLM prompts → template prompts (`phase_prompts_template` already exists as fallback in song_to_video.py — wire the same pattern into director.py).
-- Consider a smaller prompt LLM (7–14B) for overnight runs: removes the 27B↔ComfyUI VRAM contention entirely, which is the likely root cause of the crash.
-
-### 1.3 Port/process hygiene
-- Known gotcha: force-killed servers leave orphaned LISTEN sockets on :8000. Runner should detect and pick a free port; add a `stop_all.bat` that cleanly kills app + ComfyUI.
+Hardware baseline unchanged: RTX 5070 Ti 16GB, 64GB RAM — the pipeline is tuned to it.
 
 ---
 
-## Tier 2 — Output quality (the difference between "generated" and "watchable")
+## ✅ Done since the 2026-07-05 plan
 
-### 2.1 Real lyric↔video sync (biggest quality win for song videos)
-- `lyrics_parser.py` currently *estimates* segment timing by evenly distributing lines. Chorus visuals can drift seconds off the actual vocals.
-- Add WhisperX (or faster-whisper) forced alignment on the generated song → word/line timestamps → cut scenes exactly on vocal phrases and section changes. CPU-friendly, runs while GPU is busy.
+- 5-step Studio Wizard + song mode + music audition round (10 variants, pick one).
+- QA layer: preflight gate, script lint, per-clip motion check + retry, final report.
+- Pause (graceful) vs Cancel (hard) on every heavy phase.
+- ACE-Step 1.5 XL Turbo primary music engine; HeartMuLa improved.
+- Z-Image-Turbo stills (character fidelity), 4x-UltraSharp/anime ESRGAN upscale path.
+- **Extreme resumability (2026-07-15)** — see below.
 
-### 2.2 Automatic clip QA + retry
-- Right now a broken clip (black frames, frozen motion, deformed character) goes straight into the final video.
-- Cheap heuristics first: detect near-black frames, near-zero inter-frame motion, extreme blur (ffmpeg/PIL, no GPU). Fail → regenerate with a new seed (retry cap 2).
-- Later: Qwen-VL scoring pass (already in PLAN.md Phase F) for aesthetic/consistency checks.
+## ✅ Tier 0 — Extreme resumability (DONE 2026-07-15)
 
-### 2.3 Character consistency via a character LoRA
-- Locked seeds + character-bible prompt repetition gets ~80% consistency; a trained SDXL LoRA of each channel's hero character gets the rest. `train_lora.py` and `gen_training_set.py` already exist — productionize: generate a training set from the best stills, train per-channel LoRA, add to channel YAML `default_loras`.
+The contract is now: **no crash, restart, or power cut ever loses finished work,
+and the server heals itself on the next boot.**
 
-### 2.4 Faster clips option: Wan 2.2 5B tier per channel
-- Wan 2.2 ti2v 5B stays VRAM-resident → ~73s/clip with no model reloads, vs LTX-22B's 2–4 min/scene reload tax. Add `quality_tier: fast|best` to channel YAML so high-volume channels use Wan and flagship videos use LTX.
-- Prerequisite cleanup: delete the duplicate/wrong `build_wan_workflow` in `comfyui_client.py` (known bug), keep the validated `build_wan22_ti2v_workflow`.
+1. **Startup recovery → checkpoint, not FAILED** (`app/main.py`
+   `_recover_interrupted_projects`): projects stuck in GENERATING / UPSCALING /
+   MUSIC / ASSEMBLING are rolled back to their last resumable status
+   (APPROVED / GENERATED) with an `[interrupted]` note.
+2. **Auto-resume on startup** (`_auto_resume_worker`, config
+   `auto_resume: bool = True`, env `AIDIR_AUTO_RESUME=0` to disable): waits up
+   to 240s for ComfyUI (auto-launching it), then runs `run_full_auto` on each
+   interrupted project sequentially. Every phase already skips finished work
+   (generated scenes, upscaled clips, active music track), so only the missing
+   pieces are produced.
+3. **Ghost-status healing on `/resume`**: if the DB says "running" but the
+   pipeline is idle (dead thread), the endpoint now rolls the status back and
+   resumes instead of 409-ing (previously required manual DB surgery).
+4. **Run journal** (`projects/<id>/run_state.json`): atomically rewritten on
+   every progress tick — phase, scene N/total, %, message, pid, timestamp.
+   After any kill you can see exactly where it died.
+5. **SQLite WAL + busy_timeout** (`app/database.py`): crash-safe journaling,
+   no more "database is locked" between pipeline thread and API reads.
+6. Already in place and load-bearing: `debug=False` (uvicorn reload was killing
+   runs on .py edits), per-scene skip logic, orphaned-RUNNING-generation repair,
+   ComfyUI auto-launch in `wait_ready`.
+
+**Still worth adding later (watchdog tier):** per-clip hard timeout that
+cancels the ComfyUI queue + restarts the ComfyUI process on hang (today a hung
+ComfyUI job stalls the run until manually restarted — but now a manual app
+restart auto-heals everything, which covers most of the pain).
 
 ---
 
-## Tier 3 — Close the loop to YouTube
+## ✅ Premium opening + production reports (DONE 2026-07-15)
 
-### 3.1 SEO metadata alongside every render
-- The director already emits `description`, `tags`, `hashtags` for story videos — the song pipeline doesn't. Emit `metadata.json` (title, description, tags, hashtags, made_for_kids flag) next to every `final_render.mp4`.
+**Premium opening** (`config.video.premium_*`): scenes starting in the first
+20s render at **960×544 @ 16 steps** instead of 832×480 @ 8 — the hook always
+looks best. Benched on the 16GB card (121-frame img2vid): 832×480@8 = 46s,
+960×544@8 = 55s, **960×544@16 = 88s (chosen — VRAM-safe)**, 1024×576 = 574s
+(spills, rejected). ~4 premium clips add only ~3 min per video. Tune via
+`premium_open_seconds/width/height/steps`; `premium_open_seconds: 0` disables.
 
-### 3.2 Thumbnail generation
-- Pick the best still (or render one dedicated SDXL image at 1280×720 with a thumbnail-specific prompt: big character face, high contrast) + optional title text overlay via PIL. Thumbnails drive CTR more than video quality does.
+**Production report**: every render now writes `report.md` +
+`production_report.json` (total wall clock, GPU clip time, avg s/clip,
+clip resolution/steps profiles, upscale wall clock, music variants, render
+stats). Backfilled for both existing videos.
 
-### 3.3 YouTube upload (Phase 7)
-- `youtube_upload.py` scaffolding exists; needs OAuth credentials + upload call + `made_for_kids` flag + scheduled publish time. Start with "upload as private/scheduled" so nothing goes live unreviewed.
+## Tier 1 — Output quality (the difference between "generated" and "watchable")
 
----
+### 1.1 Real lyric↔video sync (biggest win for song videos)
+`lyrics_parser.py` distributes lines evenly — chorus visuals drift seconds off
+the vocals. Add faster-whisper/WhisperX forced alignment on the generated song
+→ word timestamps → cut scenes exactly on phrases. CPU-friendly, can run while
+the GPU renders clips.
 
-## Tier 4 — Maintainability (cheap, do opportunistically)
+### 1.2 IC-LoRA character consistency A/B (files already in place)
+43GB BF16 LTX + 1.3GB IC-LoRA downloaded; reference-sheet recipe documented.
+Run the official workflow + A/B against current Z-Image + locked-seed approach;
+adopt if clearly better.
 
-### 4.1 Repo cleanup
-- ~60 one-off scripts, logs, PNGs, and 3 SQLite DBs (`ai_director.db`, `app.db`, `director.db`) sit in the repo root. Move keepers to `scripts/`, archive experiments, gitignore `*.log`/`*.png`/`*.db`, delete the stale DBs.
+### 1.3 Frames-vs-fps bug (open, known)
+Clip duration math mismatch flagged in the wizard sessions — audit
+`num_frames`/`fps` handoff from scene duration to LTX/Wan workflows so a "5s"
+scene is actually 5s. Cheap fix, affects every video's sync.
 
-### 4.2 Job configs out of code
-- Song definitions live as Python literals inside `song_to_video.py`. Move them to `jobs/*.yaml` so adding tonight's videos never means editing pipeline code (also what the Tier 1 runner consumes).
+### 1.4 Re-download the corrupt ACE-Step Turbo model
+Turbo engine fails at UNETLoader (truncated download + leftover .tmp). SFT
+works, so this only blocks the fastest music engine.
 
-### 4.3 Test suite for the song pipeline
-- `test_smoke.py` covers the story pipeline; add an equivalent for song_to_video (lyrics parser unit tests need no GPU).
+## Tier 2 — Close the loop to YouTube
+
+### 2.1 `metadata.json` next to every render
+Title, description, tags, hashtags, made_for_kids — the director emits these
+for story projects; song projects don't. Small, unblocks upload automation.
+
+### 2.2 Thumbnail generation
+One dedicated Z-Image still (1280×720, big character face, high contrast) +
+optional PIL title overlay. Thumbnails drive CTR more than video quality.
+
+### 2.3 YouTube upload — private/scheduled first
+`youtube_upload.py` scaffolding exists; needs OAuth + upload call. Nothing
+goes public unreviewed.
+
+## Tier 3 — Overnight scale
+
+### 3.1 Job queue for multi-video nights
+`autoproduce.py` handles one video. Add a `jobs/*.yaml` queue the server (not a
+script — app-native, per your direction) drains sequentially: each job =
+channel + title/lyrics + duration. With Tier 0 done, a failed job no longer
+kills the night — the next boot resumes it.
+
+### 3.2 End-of-night report
+`report.md` per night: per-job status, timings, output paths, QA summaries —
+one glance over coffee.
+
+## Tier 4 — Maintainability (opportunistic)
+
+- Repo root has ~80 one-off scripts/logs/PNGs and 3 SQLite DBs. Move keepers to
+  `scripts/`, gitignore `*.log/*.png/*.db`, delete `app.db`/`director.db`.
+- Commit discipline: `ai_director.db` is tracked in git and constantly dirty —
+  gitignore it (it's runtime state, not source).
+- Song-pipeline unit tests (lyrics parser needs no GPU).
 
 ---
 
@@ -76,11 +124,11 @@ The pipeline works, but one hang at 1am currently kills the whole night. These m
 
 | Step | Item | Effort | Payoff |
 |------|------|--------|--------|
-| 1 | 1.1 Overnight runner + watchdog | ~1 session | Every night becomes productive |
-| 2 | 1.2 LLM fallback hardening | small | No dead runs |
-| 3 | 2.1 WhisperX lyric sync | ~1 session | Videos feel professionally edited |
-| 4 | 3.1 + 3.2 metadata + thumbnails | small | Upload-ready output |
-| 5 | 2.2 clip QA heuristics | medium | No broken scenes in finals |
-| 6 | 2.3 character LoRA | ~1 session + training time | Channel identity |
-| 7 | 3.3 YouTube upload (private first) | medium | Full loop closed |
-| 8 | Tier 4 cleanup | ongoing | Sanity |
+| ✅ | Tier 0 extreme resumability | done | Crashes stop costing nights |
+| 1 | 1.3 frames-vs-fps audit | small | Every video's timing correct |
+| 2 | 1.1 WhisperX lyric sync | ~1 session | Videos feel professionally edited |
+| 3 | 2.1 + 2.2 metadata + thumbnails | small | Upload-ready output |
+| 4 | 1.2 IC-LoRA A/B | ~1 session | Channel identity |
+| 5 | 3.1 job queue | medium | Multi-video nights |
+| 6 | 2.3 YouTube upload (private) | medium | Full loop closed |
+| 7 | 1.4 turbo re-download + Tier 4 | background | Sanity |

@@ -252,7 +252,25 @@ def init_db(db_path: str = None):
         # the server uses.
         from app.config import settings
         db_path = str(settings.paths.database)
-    _engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    _engine = create_engine(
+        f"sqlite:///{db_path}", echo=False,
+        # A pipeline thread holding a write while an API request reads used to
+        # raise "database is locked"; wait instead of failing.
+        connect_args={"timeout": 30},
+    )
+
+    from sqlalchemy import event
+
+    @event.listens_for(_engine, "connect")
+    def _sqlite_crash_safety(dbapi_conn, _record):
+        # WAL survives process kills / power loss without corrupting the DB,
+        # and lets readers proceed while a pipeline thread writes checkpoints.
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        cur.close()
+
     Base.metadata.create_all(_engine)
     _SessionLocal = sessionmaker(bind=_engine)
     _migrate(_engine)

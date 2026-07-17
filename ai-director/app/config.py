@@ -126,10 +126,28 @@ class VideoModelConfig(BaseModel):
     default_fps: int = 16
     default_steps: int = 8        # 8 steps = faster generation while keeping good LTX quality
     default_cfg: float = 1.0      # distilled models use low cfg
+    # Per-clip frame ceiling (must be 8n+1 for LTX). 121 = 5.04s @24fps,
+    # bench-validated VRAM-safe at 832x480 on the 16GB card. Do not raise
+    # without re-benching peak VRAM (test_img2vid_bench.py pattern).
+    max_num_frames: int = 121
     seed: int = -1                # -1 = random
     # img2vid: higher = clip stays closer to the (clean) still -> less hair/shirt
-    # edge warping, calmer motion (good for gentle poem/nasheed videos).
-    img2vid_strength: float = 0.7
+    # edge warping, calmer motion. Raised 0.7 -> 0.75 (2026-07-15, user request):
+    # slow-to-medium character movement — fast motion makes local models fumble
+    # (warped limbs); calmer clips read cleaner and stay above the frozen-clip
+    # QA threshold thanks to ambient-motion prompt cues.
+    img2vid_strength: float = 0.75
+    # ── Premium opening ──────────────────────────────────────────────────
+    # Retention is decided in the first seconds: scenes that START inside
+    # this window render at a higher resolution + more steps (slower per
+    # clip, deliberately), so the hook always looks best. 0 disables.
+    # Benched 2026-07-15 (121f img2vid, LTX-22B, 16GB): 832x480@8 = 46s,
+    # 960x544@8 = 55s, 960x544@16 = 88s (VRAM-safe), 1024x576 SPILLS = 574s.
+    # 960x544@16 is the sweet spot: +33% pixels, 2x sampling, ~1.5min/clip.
+    premium_open_seconds: float = 20.0
+    premium_width: int = 960
+    premium_height: int = 544
+    premium_steps: int = 16   # distilled LTX default is 8
 
 
 class VideoModelAltConfig(BaseModel):
@@ -198,6 +216,12 @@ class Settings(BaseSettings):
     # which restarts the server (killing any in-flight generation run) every
     # time a .py file is edited.
     debug: bool = False
+    # Extreme resumability: projects that were mid-pipeline when the server
+    # died are always rolled back to their last checkpoint on startup (no work
+    # is ever lost). auto_resume=False (user preference): recovered projects
+    # WAIT for an explicit "Resume" click / POST /resume instead of restarting
+    # GPU work by themselves on boot. Set AIDIR_AUTO_RESUME=1 to flip.
+    auto_resume: bool = False
 
     paths: PathConfig = PathConfig()
     llm: LLMModelConfig = LLMModelConfig()

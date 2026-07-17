@@ -35,28 +35,75 @@ pipeline: Optional[PipelineOrchestrator] = None
 ws_clients: list[WebSocket] = []
 
 
-def _repair_stuck_projects():
-    """Reset any projects stuck in active pipeline states to FAILED on startup."""
+# When a run dies mid-phase, roll the project back to the last completed
+# checkpoint (NOT to FAILED — all finished scenes/upscales/music live in the
+# DB and on disk, so nothing is lost and run_full_auto continues from there).
+_RESUMABLE_ROLLBACK = {
+    ProjectStatus.GENERATING: ProjectStatus.APPROVED,   # scene loop re-skips done scenes
+    ProjectStatus.UPSCALING: ProjectStatus.GENERATED,   # upscale re-skips upscaled clips
+    ProjectStatus.MUSIC: ProjectStatus.GENERATED,       # active track is reused
+    ProjectStatus.ASSEMBLING: ProjectStatus.GENERATED,  # render just re-runs
+}
+
+INTERRUPT_MARKER = "[interrupted]"
+
+
+def _recover_interrupted_projects() -> list[str]:
+    """Startup recovery: any project left in an active pipeline state by a
+    crash/restart is rolled back to its last resumable checkpoint. Returns the
+    recovered project ids (newest first) so startup can auto-resume them."""
     from app.database import get_session, Project, ProjectStatus
     session = get_session()
+    recovered = []
     try:
         stuck_projects = session.query(Project).filter(
-            Project.status.in_([
-                ProjectStatus.GENERATING,
-                ProjectStatus.UPSCALING,
-                ProjectStatus.ASSEMBLING,
-            ])
-        ).all()
+            Project.status.in_(list(_RESUMABLE_ROLLBACK.keys()))
+        ).order_by(Project.updated_at.desc()).all()
+        next_step = ("auto-resume queued" if settings.auto_resume
+                     else "press Resume to continue")
         for proj in stuck_projects:
-            logger.info(f"[Main] Resetting stuck project {proj.id} from {proj.status.value} to FAILED on startup")
-            proj.status = ProjectStatus.FAILED
-            proj.error_log = "Server restarted or recovered from ghost state."
+            old = proj.status
+            proj.status = _RESUMABLE_ROLLBACK[old]
+            proj.error_log = (
+                f"{INTERRUPT_MARKER} Server stopped during {old.value}; "
+                f"all finished work is saved — {next_step}.")
+            recovered.append(proj.id)
+            logger.info(
+                f"[Recovery] Project {proj.id}: {old.value} -> "
+                f"{proj.status.value} (resumable, {next_step})")
         if stuck_projects:
             session.commit()
     except Exception as e:
-        logger.error(f"Failed to repair stuck projects: {e}")
+        logger.error(f"Failed to recover interrupted projects: {e}")
     finally:
         session.close()
+    return recovered
+
+
+def _auto_resume_worker(project_ids: list[str]):
+    """Continue interrupted projects after a restart: wait for ComfyUI to be
+    ready (auto-launching it if installed), then run each project to
+    completion sequentially. Runs in a daemon thread."""
+    import time
+    time.sleep(5)  # let uvicorn finish booting before heavy work starts
+    try:
+        from app.services.comfyui_client import ComfyUIClient
+        client = ComfyUIClient()
+        logger.info("[AutoResume] Waiting for ComfyUI (auto-launching if needed)...")
+        if not client.wait_ready(timeout=240):
+            logger.warning(
+                "[AutoResume] ComfyUI not ready after 240s — resuming anyway "
+                "(preflight will decide; upscale would fall back to lanczos)")
+    except Exception as e:
+        logger.warning(f"[AutoResume] ComfyUI readiness check failed: {e}")
+
+    for pid in project_ids:
+        try:
+            logger.info(f"[AutoResume] Resuming project {pid} from its last checkpoint")
+            pipeline.run_full_auto(pid)
+            logger.info(f"[AutoResume] Project {pid} finished")
+        except Exception as e:
+            logger.error(f"[AutoResume] Resume of {pid} failed: {e}", exc_info=True)
 
 
 # ── Lifespan ───────────────────────────────────────────────────────────────
@@ -89,12 +136,23 @@ async def lifespan(app: FastAPI):
         pass
 
     init_db(str(settings.paths.database))
-    _repair_stuck_projects()
+    interrupted = _recover_interrupted_projects()
     register_all_loaders(model_manager, settings)
     pipeline = PipelineOrchestrator(settings, model_manager)
     pipeline.on_progress(broadcast_progress_sync)
     logger.info("AI Director started")
     _seed_default_channel()
+    if interrupted:
+        if settings.auto_resume:
+            logger.info(f"[AutoResume] {len(interrupted)} interrupted project(s) "
+                        f"will resume automatically: {interrupted}")
+            threading.Thread(
+                target=_auto_resume_worker, args=(interrupted,),
+                name="auto-resume", daemon=True,
+            ).start()
+        else:
+            logger.info(f"[AutoResume] Disabled (AIDIR_AUTO_RESUME=0) — "
+                        f"{len(interrupted)} project(s) recovered but not resumed: {interrupted}")
     yield
     # Shutdown
     model_manager.unload()
@@ -447,6 +505,9 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
         "total_scenes": project.total_scenes,
         "completed_scenes": project.completed_scenes,
         "output_path": project.output_path,
+        "srt_url": (f"/projects/{project.id}/final_render.srt"
+                    if (settings.paths.projects_dir / project.id / "final_render.srt").exists()
+                    else None),
         "error_log": project.error_log,
         "video_model": project.video_model,
         "default_lora_ids": project.default_lora_ids or [],
@@ -829,23 +890,24 @@ def scenes_manual(project_id: str, req: ManualScenesReq, db: Session = Depends(g
     # 4.0s: the final video length = clip count x duration - crossfade
     # overlaps, and the music is trimmed to the VIDEO — so a 250s target
     # with 50 hardcoded 4s clips silently produced a ~2:56 video.
-    # Clip ceiling is ~4.0s (97-frame VRAM-safe cap at 24fps).
+    # Clip ceiling comes from config.video.max_num_frames (VRAM-benched).
     td = settings.generation.transition_duration
+    max_clip_s = round(int(getattr(settings.video, "max_num_frames", 97)) / 24.0, 2)
     n = len(prompts)
     warning = None
-    per_scene = 4.0
+    per_scene = max_clip_s
     if n and project.duration_target:
         needed_total = project.duration_target + max(0, n - 1) * td
-        per_scene = round(min(max(needed_total / n, 2.0), 4.0), 2)
+        per_scene = round(min(max(needed_total / n, 2.0), max_clip_s), 2)
         expected_final = n * per_scene - max(0, n - 1) * td
         if expected_final < project.duration_target - 10:
             shortfall = project.duration_target - expected_final
-            more = int((shortfall + 4.0 - td - 0.01) // (4.0 - td)) + 1
+            more = int((shortfall + max_clip_s - td - 0.01) // (max_clip_s - td)) + 1
             warning = (
                 f"{n} clips x {per_scene}s gives a ~{int(expected_final)}s video, but the "
-                f"project target is {project.duration_target}s (clips are capped at 4s). "
-                f"Add ~{more} more scene prompts to reach the target, or the music will be "
-                f"trimmed to the shorter video.")
+                f"project target is {project.duration_target}s (clips are capped at "
+                f"{max_clip_s}s). Add ~{more} more scene prompts to reach the target, or "
+                f"the music will be trimmed to the shorter video.")
 
     new_scenes = []
     for i, p in enumerate(prompts):
@@ -988,8 +1050,15 @@ def resume_project(project_id: str, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(404, "Project not found")
     _ensure_pipeline_idle()
-    if project.status in (ProjectStatus.GENERATING, ProjectStatus.UPSCALING, ProjectStatus.ASSEMBLING):
-        raise HTTPException(409, "Pipeline already running for this project")
+    if project.status in _RESUMABLE_ROLLBACK:
+        # The pipeline is idle (checked above), so an "active" DB status is a
+        # ghost left by a dead run. Roll back to the checkpoint and resume —
+        # a 409 here used to strand the project until manual DB surgery.
+        old = project.status
+        project.status = _RESUMABLE_ROLLBACK[old]
+        project.error_log = None
+        db.commit()
+        logger.info(f"[Resume] Cleared ghost status {old.value} -> {project.status.value} for {project_id}")
 
     def run():
         try:

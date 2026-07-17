@@ -1,0 +1,79 @@
+name: "Baby Pooem"
+slug: "baby-pooem"
+language: "English"   # simple toddler-level English; visual prompts always English
+made_for_kids: true
+target_audience: "Babies & toddlers 1-4 + parents (global English) — sing-along animal rhymes by day, sleep aids by night"
+channel_link: "https://www.youtube.com/@BabyPooem"
+vibe: "Soft, sweet, safe — a plush pastel world of chubby baby animals; every video is either a giggle or a goodnight"
+niche: "ENGLISH ANIMAL POEMS is the core brand — every video is a sung poem ABOUT animals: their sounds, their moves, their homes. Animal sounds ARE the lyrics hooks (quack, meow, woof, tweet). This is the channel's search identity: 'animal poems', 'animal songs for kids', 'animal rhymes'."
+
+# ── Format: TWO content lanes (pick ONE per video, never mix) ────────────────
+format: "Song-mode ANIMAL POEM video, 2:30-5:00. Lane A 'PLAYTIME': bouncy animal poem — one hero animal (or a parade of animals, one per verse) playing and making its sound. Lane B 'DREAMTIME': slow animal lullaby, night palette, sleepy animals drifting off."
+episode_structure:
+  - "MEET: hero animal introduced in its home spot (nest, pond, meadow) — closest, cutest shot of the video"
+  - "PLAY/DRIFT: 3-4 simple actions matching the verses (splash, waddle, peek, stretch, yawn) — ONE action per scene"
+  - "FRIEND: one supporting animal joins for the middle verses (max 2 animals in frame, ever)"
+  - "HOOK SCENES: every chorus repeat gets the hero doing its signature move — same framing each time = the visual earworm"
+  - "GOODBYE/GOODNIGHT: hero waves or falls asleep; end on a calm wide shot (thumbnail candidate is the MEET shot, not this)"
+
+# ── Characters: rotating hero, but LOCKED descriptor per video ────────────────
+character_system: "ONE hero baby animal per video + at most one friend — OR parade format: one animal per VERSE, each verse's animal gets its own locked descriptor string repeated EXACTLY in every scene of that verse (Character-Bible method). Never more than 2 animals in one frame. Babies of animals only — chubby, oversized head, tiny body."
+character_examples:
+  - "a chubby fluffy yellow baby duckling with an oversized round head, big glossy dark eyes, tiny orange beak and feet, soft downy feathers"
+  - "a plump sleepy grey baby bunny with long floppy ears, huge shiny brown eyes, a twitchy pink nose, holding a tiny star-print blanket"
+  - "a round fluffy white baby kitten with big sky-blue eyes, pink inner ears, a little red bow on its head"
+
+# ── Visual identity ───────────────────────────────────────────────────────────
+art_style_phrase: "adorable soft 3D cartoon render, plush toy-like baby animals, huge glossy eyes, rounded shapes, soft dreamy lighting, pastel colors, gentle depth of field"
+color_palette:
+  playtime: "sunny pastels — butter yellow, sky blue, mint green, blossom pink; bright soft daylight"
+  dreamtime: "night pastels — deep indigo sky, silver moonlight, warm amber window glow, twinkling gold stars"
+visual_style:
+  - "Always stylized soft 3D — plush/rounded like premium baby toys, NEVER photorealistic, NEVER creepy"
+  - "Hero animal LARGE in frame (medium close-up, waist/chest up) — face must stay big so eyes render clean"
+  - "One clear gentle action per scene; scenery does the secondary motion (floating bubbles, drifting fireflies, swaying flowers, twinkling stars)"
+  - "Repeat the art_style_phrase and the hero's exact descriptor string in EVERY prompt"
+negative_prompt_additions: "photorealistic, realistic animal fur, human, human face, hands, fingers, text, letters, watermark, scary, dark shadows on faces, sharp teeth, angry expression, deformed, extra limbs, asymmetric eyes, blurry, low quality, fast motion, rapid jerky movement, motion blur, flickering"
+still_ratio: 0.0
+scene_type_directive: "Use scene_type 'img2vid' for EVERY scene. Each prompt describes ONE slow gentle action (slow waddling, softly splashing, ears drooping sleepily, slow stretching, gentle head tilt, drifting on water, slow blinking) plus soft ambient motion. NEVER fast action — slow reads as 'baby-cute' AND renders clean on local models."
+
+# ── Content rules ─────────────────────────────────────────────────────────────
+content_rules:
+  - "Lyrics: toddler vocabulary, 4-6 words per line, heavy repetition, one short chorus hook repeated top and bottom (the earworm)"
+  - "PLAYTIME teaches ONE tiny thing through play (animal sound, counting to 3, a body part, splash = fun)"
+  - "DREAMTIME never surprises: tempo, palette and motion only ever get slower and softer as the song proceeds"
+  - "Zero peril, zero conflict — the 'story' is just play or falling asleep"
+
+# ── Music (song mode — lyrics drive scenes) ───────────────────────────────────
+music:
+  # ACE-Step gets the FULL style string verbatim (fixed 2026-07-16) — write it
+  # like a producer's brief: genre + who sings and how + instruments + rhythm
+  # feel + key + hook + mix terms + explicit 'NNN bpm' (honored literally).
+  # VOCAL CLARITY: lead the prompt with the vocal description (ACE weights
+  # early tags hardest); solo lead only — a choir singing full lyrics smears
+  # the words, so choir/humming is echoes-between-lines only.
+  playtime_style: "clear solo female vocal, crisp clear enunciation, vocals loud and forward in the mix, cheerful children's nursery rhyme, bouncy playful melody, soft kids choir echoes on the hook only, ukulele strums, glockenspiel, marimba, gentle hand claps, light kick drum, bright major key, catchy repetitive sing-along chorus hook with animal sounds, wholesome kids pop, professional studio mix, clean bright master, 100 bpm"
+  dreamtime_style: "clear soft solo female vocal, gentle clear enunciation, vocals forward in the mix, dreamy baby lullaby, slow rocking waltz feel, music box melody, celesta, soft string pads, warm acoustic guitar arpeggios, very quiet soothing backing, tender humming only between lines, simple repeated goodnight hook, professional studio mix, soft warm master, 70 bpm"
+
+# ── Titles & SEO (match the channel's existing pattern) ──────────────────────
+title_formulas:
+  - "PLAYTIME: '{Animal} Song | {cute action words} | Fun Animal Rhymes & Poems for Kids #animal #poem'"
+  - "DREAMTIME: '{Dreamy name} Lullaby | Bedtime Song for Deep Sleep | #sleep #babypoem'"
+seo_themes:
+  - "baby poems, nursery rhymes, animal songs for kids, toddler learning songs, lullaby, bedtime songs, sleep music for babies, kids rhymes, animal poems, learning through play"
+
+# ── Local-AI generation presets (verified 16GB-safe) ──────────────────────────
+generation:
+  target_resolution: "1080p"
+  video_base: "832x480"
+  clip_seconds: [4, 5]        # slower pacing than comedy — let cute moments breathe
+  prefer: "img2vid for every scene; lock seed per project"
+  video_model: "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+  default_loras: []
+
+avoid:
+  - "humans or human faces in any frame"
+  - "predators being scary, anything startling, loud visual chaos"
+  - "text rendered inside the frame"
+  - "more than 2 animals in a single clip (consistency killer)"
+  - "realistic fur/feather texture (reads uncanny at toddler-cute proportions)"

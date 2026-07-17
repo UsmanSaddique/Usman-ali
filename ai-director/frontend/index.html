@@ -685,7 +685,7 @@ tr { cursor: pointer; }
           </div>
           <div class="form-group full">
             <label>Music Style</label>
-            <input type="text" id="wiz-music-style" placeholder="children's song, cheerful female vocal, ukulele, glockenspiel, happy sing-along">
+            <input type="text" id="wiz-music-style" placeholder="genre + vocal (who sings, how) + instruments + rhythm/feel + key + hook + 'professional studio mix' + NNN bpm">
           </div>
           <div class="form-group full">
             <label>Lyrics (synced with Step 1 — edit here and the vocals will sing exactly this)</label>
@@ -808,6 +808,7 @@ tr { cursor: pointer; }
           <video id="wiz-final-video" controls style="width:100%;border-radius:8px;background:#000"></video>
           <div class="btn-group mt-8">
             <a id="wiz-final-download" class="btn-success" href="#" download>⬇ Download MP4</a>
+            <a id="wiz-final-srt" class="btn-outline hidden" href="#" download>📝 Lyrics .srt</a>
             <button class="btn-outline" onclick="showPage('dashboard')">Back to Dashboard</button>
           </div>
           <div class="mt-16">
@@ -911,7 +912,10 @@ tr { cursor: pointer; }
       <div class="card mt-16 hidden" id="final-video-card">
         <h3 class="flex-between">
           <span>🎬 Final Video</span>
-          <a id="final-download" class="btn-success btn-sm" href="#" download>⬇ Download MP4</a>
+          <span class="btn-group">
+            <a id="final-srt-download" class="btn-outline btn-sm hidden" href="#" download>📝 Lyrics .srt</a>
+            <a id="final-download" class="btn-success btn-sm" href="#" download>⬇ Download MP4</a>
+          </span>
         </h3>
         <video id="final-video-player" controls style="width:100%; border-radius:8px; margin-top:8px; background:#000;"></video>
       </div>
@@ -1192,6 +1196,7 @@ function renderProjectSilent() {
       break;
     case 'rendered':
       btns = `<a class="btn-success" href="/projects/${p.id}/final_render.mp4" download>⬇ Download MP4</a>
+              ${p.srt_url ? `<a class="btn-outline" href="${p.srt_url}" download>📝 Lyrics .srt</a>` : ''}
               <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
@@ -1395,6 +1400,7 @@ function renderProject() {
       break;
     case 'rendered':
       btns = `<a class="btn-success" href="/projects/${p.id}/final_render.mp4" download>⬇ Download MP4</a>
+              ${p.srt_url ? `<a class="btn-outline" href="${p.srt_url}" download>📝 Lyrics .srt</a>` : ''}
               <button class="btn-outline" onclick="openWizard(currentProject.id)">🪄 Open in Wizard</button>
               <button class="btn-outline" onclick="pipelineAction('render')">Re-render</button>`;
       break;
@@ -1418,6 +1424,11 @@ function renderProject() {
       const player = document.getElementById('final-video-player');
       if (player.getAttribute('src') !== url) player.src = url;
       document.getElementById('final-download').href = `/projects/${p.id}/final_render.mp4`;
+      const srtLink = document.getElementById('final-srt-download');
+      if (srtLink) {
+        srtLink.classList.toggle('hidden', !p.srt_url);
+        if (p.srt_url) srtLink.href = p.srt_url;
+      }
       finalCard.classList.remove('hidden');
     } else {
       finalCard.classList.add('hidden');
@@ -2141,6 +2152,7 @@ async function wizCreate(fullAuto) {
     num_scenes: parseInt(document.getElementById('wiz-clips').value) || 5,
     context: document.getElementById('wiz-context').value,
     lyrics: document.getElementById('wiz-lyrics').value.trim() || null,
+    music_style: document.getElementById('wiz-music-style').value.trim() || null,
   };
   try {
     const r = await api('/api/projects', 'POST', body);
@@ -2155,7 +2167,7 @@ async function wizCreate(fullAuto) {
     } else {
       // sensible default music style from the brief
       const styleEl = document.getElementById('wiz-music-style');
-      if (!styleEl.value) styleEl.value = "children's song, cheerful female vocal, children choir, ukulele, glockenspiel, soft piano, happy sing-along, professional studio mix";
+      if (!styleEl.value) styleEl.value = "cheerful children's nursery rhyme, sweet clear female lead vocal with cute kids choir answering, bouncy playful melody, ukulele strums, glockenspiel, marimba, soft hand claps, light kick drum, bright major key, catchy repetitive sing-along chorus hook, call and response, wholesome kids pop, professional studio mix, clean bright master, 100 bpm";
       wizGo(2);
     }
   } catch(e) { alert('Error: ' + e.message); }
@@ -2191,7 +2203,7 @@ Give me ALL of the following, clearly numbered:
    - A line fully in (parentheses) = instrumental break, e.g. (playful instrumental)
    - NO timestamps, NO other markup, NO text before the first tag
 
-3) NUMBER OF CLIPS — my clips render at most 4 seconds each and crossfades overlap 0.5s, so a ${duration}s video needs AT LEAST ${Math.ceil((duration - 0.5) / 3.5)} clips. I currently plan ${clips} (~${perClip}s each). Confirm the right count for ${duration}s.
+3) NUMBER OF CLIPS — my clips render at most 5 seconds each and crossfades overlap 0.5s, so a ${duration}s video needs AT LEAST ${Math.ceil((duration - 0.5) / 4.5)} clips. I currently plan ${clips} (~${perClip}s each). Confirm the right count for ${duration}s.
 
 4) CREATIVE NOTES — 2–3 sentences for the video: theme, main characters, mood, settings.`;
 
@@ -2830,6 +2842,11 @@ async function wizRefresh() {
     const url = `/projects/${p.id}/final_render.mp4?t=${Date.now()}`;
     if (!v.getAttribute('src')) v.src = url;
     document.getElementById('wiz-final-download').href = `/projects/${p.id}/final_render.mp4`;
+    const wizSrt = document.getElementById('wiz-final-srt');
+    if (wizSrt) {
+      wizSrt.classList.toggle('hidden', !p.srt_url);
+      if (p.srt_url) wizSrt.href = p.srt_url;
+    }
     document.getElementById('wiz-final').classList.remove('hidden');
     if (wiz.step === 5) wizStopPoll();
   }
@@ -2847,6 +2864,7 @@ async function openWizard(id) {
     document.getElementById('wiz-context').value = p.context || '';
     document.getElementById('wiz-lyrics').value = p.lyrics || '';
     document.getElementById('wiz-music-lyrics').value = p.lyrics || '';
+    document.getElementById('wiz-music-style').value = p.music_style || '';
     wizHint();
     // infer the resume step
     const scenes = p.scenes || [];

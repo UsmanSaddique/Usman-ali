@@ -143,7 +143,8 @@ def preflight(config) -> PreflightReport:
 # ── Creative Script Lint (auto-fixing) ─────────────────────────────────────
 
 def lint_script(scenes: list, channel_profile: dict, target_duration: float,
-                clip_range: tuple = (3.0, 8.0)) -> list[str]:
+                clip_range: tuple = (3.0, 8.0),
+                video_clip_cap: float = None) -> list[str]:
     """Enforce the channel's creative rules on DB Scene rows, IN PLACE.
 
     Conservative auto-fixes (a senior creative pass, not a rewrite):
@@ -194,21 +195,42 @@ def lint_script(scenes: list, channel_profile: dict, target_duration: float,
 
         scene.prompt = prompt
 
-    # durations: clamp, then scale the total to hit the target exactly
+    # durations: clamp, then scale the total to hit the target exactly.
+    # video_clip_cap = the PHYSICAL per-clip ceiling (max_num_frames / fps —
+    # e.g. 121f @ 24fps = 5.04s for LTX). A txt2vid/img2vid scene assigned
+    # more than that silently renders at the cap, so the final video comes
+    # out shorter than target. Only still_pan (ffmpeg, any length) is exempt.
+    def _ceiling(scene) -> float:
+        stype = getattr(scene.scene_type, "value", str(scene.scene_type))
+        if video_clip_cap and stype != "still_pan":
+            return float(video_clip_cap)
+        return float("inf")
+
     lo, hi = clip_range
     for scene in scenes:
         d = float(scene.duration or lo)
-        clamped = max(lo, min(hi, d))
-        if clamped != d:
+        clamped = max(lo, min(hi, _ceiling(scene), d))
+        if abs(clamped - d) > 0.01:
             notes.append(f"scene {scene.scene_number}: duration {d:.1f}s clamped to {clamped:.1f}s")
         scene.duration = clamped
 
-    total = sum(float(s.duration) for s in scenes)
-    if total > 0 and abs(total - target_duration) / target_duration > 0.05:
+    # Scale up toward the target, but never past a scene's physical ceiling
+    # (water-filling: capped scenes stay put, the rest absorb the remainder).
+    for _ in range(3):
+        total = sum(float(s.duration) for s in scenes)
+        if total <= 0 or abs(total - target_duration) / max(target_duration, 1) <= 0.05:
+            break
         scale = target_duration / total
         for scene in scenes:
-            scene.duration = round(float(scene.duration) * scale, 2)
+            scene.duration = round(min(float(scene.duration) * scale, _ceiling(scene)), 2)
         notes.append(f"durations scaled x{scale:.2f} ({total:.1f}s -> {target_duration:.0f}s target)")
+
+    total = sum(float(s.duration) for s in scenes)
+    if target_duration > 0 and (target_duration - total) / target_duration > 0.05:
+        notes.append(
+            f"WARNING: {len(scenes)} scenes at the {video_clip_cap:.2f}s/clip ceiling "
+            f"reach only {total:.0f}s of the {target_duration:.0f}s target — "
+            f"add more scenes (need ~{int(target_duration / video_clip_cap) + 1})")
 
     for n in notes:
         logger.info(f"[QA] lint: {n}")

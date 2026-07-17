@@ -126,8 +126,8 @@ Respond with ONLY valid JSON — no markdown, no explanation, no preamble. The p
       }
     }
   ],
-  "music_style": "concise music-generation prompt (instruments, genre, tempo)",
-  "music_mood": "peaceful, dreamy, magical",
+  "music_style": "concise music-generation prompt emphasizing strong rhythm, clear beat, and highly enjoyable musicality (instruments like drums/bass, genre, upbeat tempo)",
+  "music_mood": "energetic, upbeat, highly enjoyable, catchy",
   "thumbnail_prompt": "ENGLISH description of the single most clickable frame for the thumbnail",
   "description": "SEO-optimized YouTube description in the narration language: a hooky first line, a 2-3 sentence summary, the moral/value, then relevant keywords woven in naturally. End with 3-5 hashtags.",
   "tags": ["15-25 SEO tags mixing the narration language AND English: topic, character, moral, niche, long-tail search phrases viewers actually type"],
