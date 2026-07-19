@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920">
+  <link rel="stylesheet" href="base.css">
+  <style id="channel-vars"></style>
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      /* subtle radial gradient behind the text */
+      background: radial-gradient(ellipse at center, rgba(88,166,255,0.06) 0%, var(--bg) 70%);
+    }
+
+    .card-container {
+      text-align: center;
+      max-width: 1400px;
+      padding: 80px;
+    }
+
+    .tc-label {
+      font-size: 22px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      margin-bottom: 24px;
+      animation: fadeIn 0.6s ease-out 0.2s forwards;
+      opacity: 0;
+    }
+
+    .accent-bar-center {
+      width: 100px;
+      height: 4px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 2px;
+      margin: 0 auto 40px;
+      animation: fadeIn 0.5s ease-out 0.4s forwards;
+      opacity: 0;
+    }
+
+    .tc-title {
+      font-size: 72px;
+      font-weight: 700;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      margin-bottom: 32px;
+      animation: fadeUp 0.9s ease-out 0.5s forwards;
+      opacity: 0;
+    }
+    .tc-title .accent {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .tc-subtitle {
+      font-size: 30px;
+      font-weight: 400;
+      color: var(--text-dim);
+      line-height: 1.5;
+      max-width: 1000px;
+      margin: 0 auto;
+      animation: fadeUp 0.8s ease-out 0.8s forwards;
+      opacity: 0;
+    }
+
+    /* ── Bottom decorative dots ──────────────────────────── */
+    .tc-dots {
+      margin-top: 48px;
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      animation: fadeIn 0.6s ease-out 1.2s forwards;
+      opacity: 0;
+    }
+    .tc-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      opacity: 0.5;
+    }
+    .tc-dot:nth-child(2) { background: var(--accent2); opacity: 0.7; }
+    .tc-dot:nth-child(3) { opacity: 0.3; }
+  </style>
+</head>
+<body>
+  <div class="card-container">
+    <div class="tc-label" id="label"></div>
+    <div class="accent-bar-center"></div>
+    <div class="tc-title" id="title"></div>
+    <div class="tc-subtitle" id="subtitle"></div>
+    <div class="tc-dots">
+      <div class="tc-dot"></div><div class="tc-dot"></div><div class="tc-dot"></div>
+    </div>
+  </div>
+
+  <script>
+    // Data: { label, title, subtitle }
+    // title supports *accent* markup
+    function render(data) {
+      document.getElementById('label').textContent = data.label || '';
+      document.getElementById('title').innerHTML =
+        (data.title || '').replace(/\*(.+?)\*/g, '<span class="accent">$1</span>');
+      document.getElementById('subtitle').textContent = data.subtitle || '';
+    }
+    if (window.__DATA__) render(window.__DATA__);
+  </script>
+</body>
+</html>

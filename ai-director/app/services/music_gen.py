@@ -42,6 +42,168 @@ def _acestep_style_tags(style_prompt: str, condensed: str) -> str:
     return s if s else condensed
 
 
+# ── ACE-Step master prompt (user-mandated format, 2026-07-19) ─────────────
+# Every ACE-Step generation is wrapped in this cinematic producer brief.
+# [Genre]/[Emotion]/[BPM]/[Key] slots are filled from the channel/style
+# brief; the original style string rides in the Genre slot so channel
+# identity (nursery-rhyme, nasheed, lullaby...) is never lost.
+
+ACESTEP_MASTER_TEMPLATE = """Create a cinematic, commercially releasable, studio-quality track with flawless production.
+
+Genre:
+{genre}
+
+Mood:
+{mood}
+
+Tempo:
+{bpm} BPM
+
+Key:
+{key}
+
+Song Structure:
+Intro (8 bars) → Verse → Pre-Chorus → Chorus → Verse 2 → Bridge → Final Chorus → Outro
+
+Production Quality:
+- Modern 2026 chart-quality mix.
+- Crystal-clear stereo imaging.
+- Ultra-clean mastering.
+- Wide dynamic range.
+- Punchy yet controlled low end.
+- Warm analog saturation.
+- High-end sparkle without harshness.
+- No clipping or distortion.
+- Professional loudness suitable for Spotify, Apple Music and YouTube.
+
+Instrumentation:
+{instrumentation}
+
+Melody:
+- Emotional.
+- Memorable.
+- Strong hook.
+- Catchy motifs.
+- Natural progression.
+- Dynamic variation.
+- Professional songwriting.
+
+Harmony:
+- Rich chord extensions.
+- Emotional transitions.
+- Modern cinematic harmony.
+- Layered textures.
+
+Rhythm:
+- Humanized timing.
+- Groove-focused.
+- Natural swing.
+- Professional drum programming.
+
+{vocals_block}
+
+Mix:
+- Every instrument occupies its own frequency space.
+- Excellent instrument separation.
+- Clean transient response.
+- Balanced frequencies.
+- Powerful but controlled bass.
+- Wide stereo field.
+- Mono-compatible.
+
+Master:
+- Radio-ready.
+- Streaming-ready.
+- Commercial loudness.
+- Premium mastering chain.
+
+Creative Direction:
+- Build tension gradually.
+- Emotional climax in final chorus.
+- Cinematic transitions.
+- Smooth automation.
+- Professional arrangement.
+- Avoid repetition.
+- Introduce subtle variations every section.
+- Add tasteful ear candy throughout.
+
+Reference Style:
+Inspired by the production quality of Hans Zimmer, Illenium, Martin Garrix, Alan Walker, and modern Hollywood soundtrack engineering, while remaining completely original and non-derivative.
+
+Negative Prompt:
+Avoid muddy mix, distorted bass, clipping, harsh highs, robotic vocals, repetitive melodies, weak transitions, poor mastering, thin sound, off-key notes, timing issues, excessive compression, low-quality synths, amateur arrangement, or generic loops.
+
+Output:
+Generate a premium, emotionally engaging, cinematic, high-fidelity production suitable for commercial release and professional streaming platforms."""
+
+_VOCALS_BLOCK = """Vocals:
+- Expressive.
+- Emotional.
+- Natural breathing.
+- Perfect pronunciation.
+- Studio-quality recording.
+- Rich harmonies.
+- Layered backing vocals.
+- Wide chorus doubles.
+- Smooth vocal automation.
+- Professional vocal chain with EQ, compression, de-essing, saturation and reverb."""
+
+_INSTRUMENTAL_BLOCK = """Vocals:
+- Instrumental only — no vocals, no humming, no voice of any kind."""
+
+_DEFAULT_INSTRUMENTATION = """- Layered cinematic synths.
+- Rich atmospheric pads.
+- Deep sub bass.
+- Tight punchy kick.
+- Clean snare.
+- Crisp hi-hats.
+- Organic percussion.
+- Modern FX.
+- Reverse impacts.
+- Risers.
+- Downlifters.
+- Textural ambience.
+- Live strings and piano where appropriate."""
+
+
+def _extract_key(style_prompt: str, mood: str) -> str:
+    """Explicit key in the brief wins ('D major', 'key of F#m'); otherwise
+    pick a sensible default from the mood."""
+    m = re.search(r"\b([A-G][#b]?)\s*(major|minor|maj|min)\b",
+                  style_prompt or "", re.IGNORECASE)
+    if m:
+        quality = "major" if m.group(2).lower().startswith("maj") else "minor"
+        return f"{m.group(1).upper()} {quality}"
+    if mood in ("dark", "melancholic", "mysterious", "sad", "epic"):
+        return "A minor"
+    return "C major"
+
+
+def _acestep_master_prompt(style_brief: str, tags: dict, bpm: int,
+                           instrumental: bool) -> str:
+    """Wrap the channel/style brief in the mandated cinematic master
+    template. The full brief goes in the Genre slot verbatim so nothing
+    the channel author wrote is thrown away."""
+    genre = (style_brief or "").strip().rstrip(".") or tags.get("genre", "cinematic")
+    mood = tags.get("mood", "uplifting")
+    instruments = tags.get("instruments", "")
+    if instruments:
+        instrumentation = "\n".join(
+            f"- {i.strip().capitalize()}." for i in instruments.split(",") if i.strip())
+        instrumentation += "\n- Rich atmospheric pads.\n- Textural ambience."
+    else:
+        instrumentation = _DEFAULT_INSTRUMENTATION
+    vocals_block = _INSTRUMENTAL_BLOCK if instrumental else _VOCALS_BLOCK
+    return ACESTEP_MASTER_TEMPLATE.format(
+        genre=genre,
+        mood=mood,
+        bpm=bpm,
+        key=_extract_key(style_brief, mood),
+        instrumentation=instrumentation,
+        vocals_block=vocals_block,
+    )
+
+
 def _explicit_bpm(style_prompt: str, fallback: int) -> int:
     """Honor an explicit 'NNN bpm' in the style prompt over the coarse
     tempo-word buckets (which map 'upbeat' to 130 even when the author
@@ -325,10 +487,12 @@ class MusicGenService:
         elif "arabic" in style_prompt.lower():
             lang = "ar"
 
-        logger.info(f"[MusicGen] ACE-Step 1.5 XL SFT tags: {clean_tags} | bpm={bpm} | lang={lang}")
+        master_prompt = _acestep_master_prompt(clean_tags, tags, bpm, instrumental)
+        logger.info(f"[MusicGen] ACE-Step 1.5 XL SFT master brief ({len(master_prompt)} chars): "
+                    f"genre='{clean_tags[:80]}' | bpm={bpm} | lang={lang}")
 
         wf = build_acestep15xl_sft_workflow(
-            style_tags=clean_tags,
+            style_tags=master_prompt,
             lyrics=lyrics,
             seconds=float(duration),
             seed=random.randint(0, 2**31 - 1),
@@ -387,10 +551,12 @@ class MusicGenService:
         elif "arabic" in style_prompt.lower():
             lang = "ar"
 
-        logger.info(f"[MusicGen] ACE-Step 1.5 XL tags: {clean_tags} | bpm={bpm} | lang={lang}")
+        master_prompt = _acestep_master_prompt(clean_tags, tags, bpm, instrumental)
+        logger.info(f"[MusicGen] ACE-Step 1.5 XL master brief ({len(master_prompt)} chars): "
+                    f"genre='{clean_tags[:80]}' | bpm={bpm} | lang={lang}")
 
         wf = build_acestep15xl_workflow(
-            style_tags=clean_tags,
+            style_tags=master_prompt,
             lyrics=lyrics,
             seconds=float(duration),
             seed=random.randint(0, 2**31 - 1),
@@ -466,8 +632,10 @@ class MusicGenService:
         client.free_vram()
         self.manager.unload()
 
+        tags = _parse_style_tags(style_prompt)
+        bpm = _explicit_bpm(style_prompt, 100)
         wf = build_acestep_workflow(
-            style_tags=style_prompt,
+            style_tags=_acestep_master_prompt(style_prompt, tags, bpm, instrumental),
             lyrics="" if instrumental else lyrics,
             seconds=float(duration),
             seed=random.randint(0, 2**31 - 1),

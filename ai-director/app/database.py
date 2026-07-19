@@ -37,9 +37,12 @@ class SceneType(str, enum.Enum):
     IMG2VID = "img2vid"
     STILL_PAN = "still_pan"       # Ken Burns effect on still image
     NARRATION_ONLY = "narration"  # black/gradient screen with narration
+    TEMPLATE = "template"         # headless-browser rendered (diagram/code/map/title_card)
+    USER_ASSET = "user_asset"     # user-provided file from assets_in/
 
 
 class SceneStatus(str, enum.Enum):
+    DRAFT = "draft"
     PENDING = "pending"
     QUEUED = "queued"
     GENERATING = "generating"
@@ -95,18 +98,34 @@ class Channel(Base):
     projects = relationship("Project", back_populates="channel")
 
 
+class SafetyVerdict(str, enum.Enum):
+    PASS = "pass"
+    REVISE = "revise"
+    BLOCK = "block"
+    OVERRIDE = "override"   # human signed off despite a non-pass verdict
+
+
 class Project(Base):
     __tablename__ = "projects"
 
     id = Column(String, primary_key=True, default=generate_uuid)
     title = Column(String, nullable=False)
     channel_id = Column(String, ForeignKey("channels.id"), nullable=False)
+    project_type = Column(String, default="song")   # "song" | "narration"
     duration_target = Column(Integer, nullable=False)  # seconds
     context = Column(Text)              # user-provided context/notes
+    narration_script = Column(Text)     # narration mode: JSON {chapters:[{beats:[...]}], seo:{...}}
+    narration_voice = Column(String)    # kokoro voice id (e.g. "am_michael") or engine override
+    narration_audio_path = Column(String)  # master narration WAV after TTS+alignment
     lyrics = Column(Text)               # song lyrics — drive music vocals + scene timing
+    lyrics_urdu = Column(Text)          # Hindi/Urdu lyric version — same video, second soundtrack
     music_style = Column(Text)          # style tags for the music engine
     music_model = Column(String, default="auto")   # auto|sft|turbo|heartmula|ace1
     upscale_inline = Column(Boolean, default=True)  # upscale each clip right after generation
+    # How video is generated: "clips" = one 5-6s ComfyUI job per scene;
+    # "ltx_director" = multi-director single workflow (20-30s per director
+    # node, native audio, reference stills attached per segment)
+    video_engine = Column(String, default="clips")
     num_scenes_target = Column(Integer, nullable=True) # user-customized target scene count
     video_model = Column(String, default="LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf")
     default_lora_ids = Column(JSON, default=list)      # ["lora_file.safetensors", ...]
@@ -149,6 +168,10 @@ class Scene(Base):
     max_retries = Column(Integer, default=3)
     director_notes = Column(JSON, default=dict) # style cues, transition hints
     narration_text = Column(Text)               # if this scene has narration
+    narration_start = Column(Float, nullable=True)  # narration mode: exact beat start (s) in master WAV
+    narration_end = Column(Float, nullable=True)    # narration mode: exact beat end (s)
+    visual_type = Column(String, nullable=True)     # broll|still|diagram|code|map|title_card
+    sfx_prompt = Column(Text, nullable=True)        # sound-design intent for this beat
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="scenes")
@@ -224,6 +247,23 @@ class RenderJob(Base):
     project = relationship("Project", back_populates="render_jobs")
 
 
+class SafetyReport(Base):
+    """YT-policy safety gate result. One row per gate run, per project.
+    The LATEST row is authoritative: start-generation refuses to run unless
+    its verdict is pass/override (override = recorded human sign-off)."""
+    __tablename__ = "safety_reports"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    verdict = Column(SAEnum(SafetyVerdict), nullable=False)
+    issues = Column(JSON, default=list)        # [{severity, category, where, detail, suggestion}]
+    checked_fields = Column(JSON, default=dict)  # what was scanned (lyrics/narration/prompts/seo)
+    auto_revisions = Column(JSON, default=list)  # [{where, before, after}] applied by the gate
+    override_note = Column(Text)               # human reason when verdict=override
+    llm_used = Column(Boolean, default=False)  # LLM critic layer ran (vs rules-only)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class LoRA(Base):
     """Registry of available LoRA weights."""
     __tablename__ = "loras"
@@ -289,7 +329,17 @@ def _migrate(engine):
             ("projects", "music_style", "TEXT", "NULL"),
             ("projects", "music_model", "VARCHAR", "'auto'"),
             ("projects", "upscale_inline", "BOOLEAN", "1"),
+            ("projects", "video_engine", "VARCHAR", "'clips'"),
+            ("projects", "lyrics_urdu", "TEXT", "NULL"),
+            ("projects", "project_type", "VARCHAR", "'song'"),
+            ("projects", "narration_script", "TEXT", "NULL"),
+            ("projects", "narration_voice", "VARCHAR", "NULL"),
+            ("projects", "narration_audio_path", "VARCHAR", "NULL"),
             ("scenes", "video_model", "VARCHAR", "NULL"),
+            ("scenes", "narration_start", "FLOAT", "NULL"),
+            ("scenes", "narration_end", "FLOAT", "NULL"),
+            ("scenes", "visual_type", "VARCHAR", "NULL"),
+            ("scenes", "sfx_prompt", "TEXT", "NULL"),
         ]:
             try:
                 conn.execute(sqlalchemy.text(

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920">
+  <link rel="stylesheet" href="base.css">
+  <style id="channel-vars"></style>
+  <style>
+    body {
+      background: var(--bg);
+      overflow: hidden;
+    }
+
+    /* ── Map background (static tile or gradient) ───────── */
+    .map-bg {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a2332 100%);
+      /* A subtle grid pattern for a map feel */
+      background-image:
+        linear-gradient(rgba(88,166,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(88,166,255,0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      animation: panMap 8s ease-in-out infinite alternate;
+    }
+    @keyframes panMap {
+      from { transform: scale(1.1) translate(-30px, -20px); }
+      to   { transform: scale(1.1) translate(30px, 20px); }
+    }
+
+    /* ── Region markers ─────────────────────────────────── */
+    .map-marker {
+      position: absolute;
+      animation: fadeUp 0.7s ease-out forwards;
+      opacity: 0;
+    }
+    .marker-dot {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 16px var(--accent), 0 0 40px rgba(88,166,255,0.3);
+      animation: glowPulse 2s ease-in-out infinite;
+    }
+    .marker-dot.secondary { background: var(--accent2); box-shadow: 0 0 16px var(--accent2); }
+    .marker-label {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text);
+      margin-top: 8px;
+      white-space: nowrap;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+    }
+    .marker-desc {
+      font-size: 15px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+    }
+
+    /* ── Connecting lines ────────────────────────────────── */
+    .map-line {
+      position: absolute;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transform-origin: left center;
+      animation: fadeIn 0.8s ease-out forwards;
+      opacity: 0;
+    }
+
+    /* ── Info box ─────────────────────────────────────────── */
+    .map-info {
+      position: absolute;
+      bottom: 60px;
+      left: 120px;
+      right: 120px;
+      background: rgba(22,27,34,0.9);
+      border: 1px solid rgba(88,166,255,0.15);
+      border-radius: var(--radius);
+      padding: 28px 36px;
+      backdrop-filter: blur(12px);
+      animation: fadeUp 0.8s ease-out 1.5s forwards;
+      opacity: 0;
+    }
+    .map-info-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    .map-info-desc {
+      font-size: 18px;
+      color: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+  <div class="map-bg"></div>
+  <div id="markers"></div>
+  <div class="map-info" id="info">
+    <div class="map-info-title" id="info-title"></div>
+    <div class="map-info-desc" id="info-desc"></div>
+  </div>
+
+  <script>
+    // Data: { title, description, markers: [{x, y, label, desc, secondary}] }
+    // x,y are percentages (0-100) positioning the marker on the viewport
+    function render(data) {
+      document.getElementById('info-title').textContent = data.title || '';
+      document.getElementById('info-desc').textContent = data.description || '';
+
+      const cont = document.getElementById('markers');
+      (data.markers || []).forEach((m, i) => {
+        const div = document.createElement('div');
+        div.className = 'map-marker';
+        div.style.left = `${m.x || 50}%`;
+        div.style.top = `${m.y || 50}%`;
+        div.style.animationDelay = `${0.3 + i * 0.4}s`;
+        div.innerHTML =
+          `<div class="marker-dot${m.secondary ? ' secondary' : ''}"></div>` +
+          `<div class="marker-label">${m.label || ''}</div>` +
+          (m.desc ? `<div class="marker-desc">${m.desc}</div>` : '');
+        cont.appendChild(div);
+      });
+    }
+    if (window.__DATA__) render(window.__DATA__);
+  </script>
+</body>
+</html>

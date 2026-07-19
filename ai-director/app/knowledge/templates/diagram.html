@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920">
+  <link rel="stylesheet" href="base.css">
+  <style id="channel-vars"></style>
+  <style>
+    body { display: flex; align-items: center; justify-content: center; }
+    .diagram-container {
+      width: 1680px;
+      padding: 60px 80px;
+    }
+    .diagram-title {
+      font-size: 42px;
+      font-weight: 700;
+      margin-bottom: 48px;
+      color: var(--text);
+    }
+    .diagram-title .accent { color: var(--accent); }
+
+    /* ── Boxes + arrows layout ─────────────────────────────── */
+    .flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      flex-wrap: wrap;
+    }
+    .flow-row {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      width: 100%;
+      justify-content: center;
+      margin-bottom: 32px;
+    }
+    .node {
+      background: var(--bg-card);
+      border: 2px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 28px 36px;
+      text-align: center;
+      min-width: 200px;
+      max-width: 320px;
+      animation: fadeUp 0.7s ease-out forwards;
+      opacity: 0;
+      position: relative;
+    }
+    .node.highlight {
+      border-color: var(--accent2);
+      box-shadow: 0 0 24px rgba(240,136,62,0.2);
+    }
+    .node-label {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    .node-desc {
+      font-size: 16px;
+      color: var(--text-dim);
+      line-height: 1.4;
+    }
+    .node-icon {
+      font-size: 36px;
+      margin-bottom: 12px;
+    }
+
+    .arrow {
+      width: 60px;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      position: relative;
+      margin: 0 4px;
+      animation: fadeIn 0.5s ease-out forwards;
+      opacity: 0;
+    }
+    .arrow::after {
+      content: '';
+      position: absolute;
+      right: -2px;
+      top: -5px;
+      border: 6px solid transparent;
+      border-left: 10px solid var(--accent2);
+    }
+    .arrow-down {
+      width: 3px;
+      height: 48px;
+      background: linear-gradient(180deg, var(--accent), var(--accent2));
+      margin: 0 auto;
+      position: relative;
+      animation: fadeIn 0.5s ease-out forwards;
+      opacity: 0;
+    }
+    .arrow-down::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: -5px;
+      border: 6px solid transparent;
+      border-top: 10px solid var(--accent2);
+    }
+
+    /* animation delays */
+    .node:nth-child(1), .arrow:nth-child(2) { animation-delay: 0.2s; }
+    .node:nth-child(3), .arrow:nth-child(4) { animation-delay: 0.5s; }
+    .node:nth-child(5), .arrow:nth-child(6) { animation-delay: 0.8s; }
+    .node:nth-child(7), .arrow:nth-child(8) { animation-delay: 1.1s; }
+    .node:nth-child(9)  { animation-delay: 1.4s; }
+    .arrow-down { animation-delay: 0.6s; }
+
+    /* Bottom note / subtitle */
+    .diagram-note {
+      margin-top: 40px;
+      font-size: 20px;
+      color: var(--text-dim);
+      text-align: center;
+      font-style: italic;
+      animation: fadeIn 1.2s ease-out 1.6s forwards;
+      opacity: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="diagram-container">
+    <div class="diagram-title" id="title"></div>
+    <div id="flow-container"></div>
+    <div class="diagram-note" id="note"></div>
+  </div>
+
+  <script>
+    // Data is injected by the template renderer as window.__DATA__
+    // Format: { title, note, rows: [[{label, desc, icon, highlight}]] }
+    // Each row is rendered as a horizontal flow; rows stack vertically with arrows between.
+    function render(data) {
+      document.getElementById('title').innerHTML =
+        (data.title || '').replace(/\*(.+?)\*/g, '<span class="accent">$1</span>');
+      document.getElementById('note').textContent = data.note || '';
+
+      const container = document.getElementById('flow-container');
+      (data.rows || []).forEach((row, ri) => {
+        if (ri > 0) {
+          const ad = document.createElement('div');
+          ad.className = 'arrow-down';
+          ad.style.animationDelay = `${0.3 + ri * 0.4}s`;
+          container.appendChild(ad);
+        }
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'flow-row';
+        row.forEach((node, ni) => {
+          if (ni > 0) {
+            const arr = document.createElement('div');
+            arr.className = 'arrow';
+            arr.style.animationDelay = `${0.3 + ri * 0.4 + ni * 0.3}s`;
+            rowDiv.appendChild(arr);
+          }
+          const nd = document.createElement('div');
+          nd.className = 'node' + (node.highlight ? ' highlight' : '');
+          nd.style.animationDelay = `${0.2 + ri * 0.4 + ni * 0.3}s`;
+          nd.innerHTML =
+            (node.icon ? `<div class="node-icon">${node.icon}</div>` : '') +
+            `<div class="node-label">${node.label || ''}</div>` +
+            (node.desc ? `<div class="node-desc">${node.desc}</div>` : '');
+          rowDiv.appendChild(nd);
+        });
+        container.appendChild(rowDiv);
+      });
+    }
+
+    if (window.__DATA__) render(window.__DATA__);
+  </script>
+</body>
+</html>

@@ -281,9 +281,13 @@ class CreateProjectReq(BaseModel):
     lora_ids: Optional[list[str]] = None
     lora_weights: Optional[list[float]] = None
     lyrics: Optional[str] = None          # song mode: drives music vocals + scene timing
+    lyrics_urdu: Optional[str] = None     # Hindi/Urdu version — same video, second soundtrack
     music_style: Optional[str] = None
     music_model: Optional[str] = None     # auto|sft|turbo|heartmula|ace1
     upscale_inline: Optional[bool] = None
+    video_engine: Optional[str] = None    # "clips" (default) | "ltx_director"
+    project_type: Optional[str] = None    # "song" (default) | "narration"
+    narration_voice: Optional[str] = None # kokoro voice id, e.g. "am_michael"
 
 
 class MusicGenReq(BaseModel):
@@ -311,6 +315,8 @@ class UpdateProjectReq(BaseModel):
     duration: Optional[int] = None  # seconds
     context: Optional[str] = None
     num_scenes: Optional[int] = None
+    video_engine: Optional[str] = None  # "clips" | "ltx_director"
+    lyrics_urdu: Optional[str] = None   # settable any time — used at render for the 2nd version
 
 class GenerateScenesReq(BaseModel):
     scene_ids: list[str]
@@ -374,9 +380,13 @@ def create_project(req: CreateProjectReq, db: Session = Depends(get_db)):
         default_lora_ids=req.lora_ids or [],
         default_lora_weights=req.lora_weights or [],
         lyrics=req.lyrics,
+        lyrics_urdu=req.lyrics_urdu,
         music_style=req.music_style,
         music_model=req.music_model or "auto",
         upscale_inline=True if req.upscale_inline is None else req.upscale_inline,
+        video_engine=req.video_engine if req.video_engine in ("clips", "ltx_director") else "clips",
+        project_type=req.project_type or "song",
+        narration_voice=req.narration_voice,
     )
     db.add(project)
     db.commit()
@@ -497,9 +507,11 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
         "num_scenes_target": project.num_scenes_target,
         "context": project.context,
         "lyrics": project.lyrics,
+        "lyrics_urdu": getattr(project, "lyrics_urdu", None),
         "music_style": project.music_style,
         "music_model": project.music_model,
         "upscale_inline": project.upscale_inline,
+        "video_engine": getattr(project, "video_engine", None) or "clips",
         "music": music_info,
         "music_variants": music_variants,
         "total_scenes": project.total_scenes,
@@ -509,10 +521,17 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
                     if (settings.paths.projects_dir / project.id / "final_render.srt").exists()
                     else None),
         "error_log": project.error_log,
+        "project_type": getattr(project, "project_type", None) or "song",
+        "narration_voice": getattr(project, "narration_voice", None),
+        "has_narration_script": bool(getattr(project, "narration_script", None)),
+        "narration_audio_url": (
+            f"/projects/{project.id}/narration/narration_master.wav"
+            if (settings.paths.projects_dir / project.id / "narration" /
+                "narration_master.wav").exists() else None),
         "video_model": project.video_model,
         "default_lora_ids": project.default_lora_ids or [],
         "default_lora_weights": project.default_lora_weights or [],
-        "channel": {"name": project.channel.name, "slug": project.channel.slug},
+        "channel": {"name": project.channel.name, "slug": project.channel.slug} if project.channel else None,
         "scenes": scenes_data,
     }
 
@@ -523,9 +542,24 @@ def update_project(project_id: str, req: UpdateProjectReq, db: Session = Depends
     if not project:
         raise HTTPException(404, "Project not found")
     
-    if project.status not in [ProjectStatus.DRAFT, ProjectStatus.SCRIPTED]:
+    # Engine switch is allowed any time the pipeline isn't running: it only
+    # affects the NEXT generation run, unlike the script-shaping fields below.
+    if req.video_engine is not None:
+        if req.video_engine not in ("clips", "ltx_director"):
+            raise HTTPException(400, "video_engine must be 'clips' or 'ltx_director'")
+        if project.status in [ProjectStatus.GENERATING, ProjectStatus.UPSCALING,
+                              ProjectStatus.ASSEMBLING]:
+            raise HTTPException(400, "Cannot change video engine while the pipeline is running")
+        project.video_engine = req.video_engine
+
+    if req.lyrics_urdu is not None:
+        project.lyrics_urdu = req.lyrics_urdu
+
+    script_fields = (req.title, req.duration, req.num_scenes, req.context)
+    if any(v is not None for v in script_fields) and \
+            project.status not in [ProjectStatus.DRAFT, ProjectStatus.SCRIPTED]:
         raise HTTPException(400, "Project cannot be updated in its current status")
-        
+
     if req.title is not None:
         project.title = req.title
     if req.duration is not None:
@@ -542,7 +576,8 @@ def update_project(project_id: str, req: UpdateProjectReq, db: Session = Depends
         "title": project.title,
         "duration_target": project.duration_target,
         "num_scenes_target": project.num_scenes_target,
-        "context": project.context
+        "context": project.context,
+        "video_engine": project.video_engine,
     }
 
 
@@ -567,6 +602,61 @@ def generate_script(project_id: str, db: Session = Depends(get_db)):
     return {"status": "started", "message": "Script generation started"}
 
 
+@app.post("/api/projects/{project_id}/generate-narration-script")
+def generate_narration_script(project_id: str, db: Session = Depends(get_db)):
+    """Narration mode phase 1: two-pass script (outline → beats) + safety gate."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
+
+    def run():
+        try:
+            pipeline.generate_narration_script(project_id)
+        except Exception as e:
+            logger.error(f"Narration script generation failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started", "message": "Narration script generation started"}
+
+
+@app.get("/api/projects/{project_id}/narration-script")
+def get_narration_script(project_id: str, db: Session = Depends(get_db)):
+    """The narration script JSON (chapters → beats) for review/editing."""
+    import json as _json
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not project.narration_script:
+        return {"script": None}
+    try:
+        return {"script": _json.loads(project.narration_script)}
+    except Exception:
+        return {"script": None, "raw": project.narration_script}
+
+
+class UpdateNarrationScriptReq(BaseModel):
+    script: dict   # full replacement of the narration script JSON
+
+
+@app.put("/api/projects/{project_id}/narration-script")
+def update_narration_script(project_id: str, req: UpdateNarrationScriptReq,
+                            db: Session = Depends(get_db)):
+    """Save user edits to the narration script. Any edit invalidates prior
+    safety verdicts — the gate re-runs before the next generation."""
+    import json as _json
+    from app.database import SafetyReport
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    project.narration_script = _json.dumps(req.script, ensure_ascii=False)
+    project.project_type = "narration"
+    # Edited text ⇒ stored verdicts no longer describe the content
+    db.query(SafetyReport).filter(SafetyReport.project_id == project_id).delete()
+    db.commit()
+    return {"status": "saved", "note": "safety verdicts reset — re-check before generating"}
+
+
 @app.post("/api/projects/{project_id}/approve-script")
 def approve_script(project_id: str, db: Session = Depends(get_db)):
     """User approves the generated script — mark all scenes as ready."""
@@ -584,6 +674,98 @@ def approve_script(project_id: str, db: Session = Depends(get_db)):
     return {"status": "approved", "scene_count": len(scenes)}
 
 
+def _reject_if_safety_blocked(db: Session, project_id: str):
+    """Fast-fail HTTP guard: if the LATEST safety verdict is block/revise,
+    refuse with 409 before spawning a generation thread. (No report yet is
+    fine — the pipeline runs the gate itself before spending GPU time.)"""
+    import os as _os
+    if _os.environ.get("AIDIR_SAFETY_ENFORCE", "1") == "0":
+        return
+    from app.services import yt_safety
+    verdict = yt_safety.latest_verdict(db, project_id)
+    if verdict in ("block", "revise"):
+        raise HTTPException(409, {
+            "error": "safety_blocked",
+            "verdict": verdict,
+            "message": "YT safety gate did not pass. Fix the flagged issues and "
+                       "re-run POST /safety-check, or record an override via "
+                       "POST /safety-override.",
+        })
+
+
+@app.post("/api/projects/{project_id}/safety-check")
+def safety_check(project_id: str, use_llm: bool = True, db: Session = Depends(get_db)):
+    """Run the universal YT-safety gate now (any project type). LLM critic
+    included by default; pass use_llm=false for the instant rules-only scan."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    def run():
+        try:
+            pipeline.safety.run_gate(project_id, use_llm=use_llm)
+        except Exception as e:
+            logger.error(f"Safety check failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started", "message": "Safety check running — poll GET /safety-report"}
+
+
+@app.get("/api/projects/{project_id}/safety-report")
+def safety_report(project_id: str, db: Session = Depends(get_db)):
+    """Latest safety report for the project (newest first)."""
+    from app.database import SafetyReport
+    rows = (db.query(SafetyReport)
+            .filter(SafetyReport.project_id == project_id)
+            .order_by(SafetyReport.created_at.desc())
+            .limit(5).all())
+    if not rows:
+        return {"verdict": None, "reports": []}
+    return {
+        "verdict": rows[0].verdict.value,
+        "reports": [{
+            "id": r.id,
+            "verdict": r.verdict.value,
+            "issues": r.issues,
+            "checked_fields": r.checked_fields,
+            "auto_revisions": r.auto_revisions,
+            "llm_used": r.llm_used,
+            "override_note": r.override_note,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows],
+    }
+
+
+class SafetyOverrideReq(BaseModel):
+    note: str   # required: who/why — recorded for the audit trail
+
+
+@app.post("/api/projects/{project_id}/safety-override")
+def safety_override(project_id: str, req: SafetyOverrideReq, db: Session = Depends(get_db)):
+    """Record a human sign-off that unblocks generation despite a non-pass
+    verdict. The override is stored as its own report row (audit trail)."""
+    from app.database import SafetyReport, SafetyVerdict
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not (req.note or "").strip():
+        raise HTTPException(422, "An override note explaining the decision is required")
+    last = (db.query(SafetyReport)
+            .filter(SafetyReport.project_id == project_id)
+            .order_by(SafetyReport.created_at.desc()).first())
+    row = SafetyReport(
+        project_id=project_id,
+        verdict=SafetyVerdict.OVERRIDE,
+        issues=(last.issues if last else []),
+        checked_fields=(last.checked_fields if last else {}),
+        override_note=req.note.strip(),
+        llm_used=False,
+    )
+    db.add(row)
+    db.commit()
+    return {"status": "override_recorded", "verdict": "override"}
+
+
 @app.post("/api/projects/{project_id}/start-generation")
 def start_generation(project_id: str, db: Session = Depends(get_db)):
     """Phase 3: Begin generating all scene assets."""
@@ -591,6 +773,7 @@ def start_generation(project_id: str, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(404, "Project not found")
     _ensure_pipeline_idle()
+    _reject_if_safety_blocked(db, project_id)
 
     def run():
         from app.services.pipeline import PipelinePaused
@@ -614,6 +797,7 @@ def generate_scenes(project_id: str, req: GenerateScenesReq, db: Session = Depen
     if not project:
         raise HTTPException(404, "Project not found")
     _ensure_pipeline_idle()
+    _reject_if_safety_blocked(db, project_id)
 
     logger.info(f"generate_scenes called for project {project_id} with req: {req.model_dump()}")
 
@@ -694,9 +878,14 @@ def render_project(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Project not found")
     _ensure_pipeline_idle()
 
+    is_narration = (getattr(project, "project_type", "song") == "narration")
+
     def run():
         try:
-            pipeline.render(project_id)
+            if is_narration:
+                pipeline.render_narration(project_id)
+            else:
+                pipeline.render(project_id)
         except Exception as e:
             logger.error(f"Render failed: {e}", exc_info=True)
 
@@ -704,6 +893,107 @@ def render_project(project_id: str, db: Session = Depends(get_db)):
     thread.start()
 
     return {"status": "started", "message": "Rendering started"}
+
+
+@app.post("/api/projects/{project_id}/generate-narration-audio")
+def generate_narration_audio(project_id: str, db: Session = Depends(get_db)):
+    """Narration phase 2: Kokoro master WAV + exact beat timings + Scene rows."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not project.narration_script:
+        raise HTTPException(400, "No narration script yet — generate it first")
+    _ensure_pipeline_idle()
+
+    def run():
+        try:
+            pipeline.generate_narration_audio(project_id)
+        except Exception as e:
+            logger.error(f"Narration audio failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started", "message": "Narration voicing started"}
+
+
+@app.get("/api/projects/{project_id}/narration-timing")
+def narration_timing(project_id: str):
+    """The narration timing sidecar (beats + word timestamps + WER QA)."""
+    import json as _json
+    timing = settings.paths.projects_dir / project_id / "narration" / "narration_timing.json"
+    if not timing.exists():
+        return {"timing": None}
+    return {"timing": _json.loads(timing.read_text(encoding="utf-8"))}
+
+
+@app.post("/api/projects/{project_id}/generate-sfx")
+def generate_sfx(project_id: str, db: Session = Depends(get_db)):
+    """Per-clip synced sound effects via MMAudio (narration mode)."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
+
+    def run():
+        try:
+            pipeline.generate_sfx(project_id)
+        except Exception as e:
+            logger.error(f"SFX generation failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started", "message": "SFX generation started"}
+
+
+@app.post("/api/projects/{project_id}/generate-narration-music")
+def generate_narration_music(project_id: str, db: Session = Depends(get_db)):
+    """Generate an instrumental music bed (ACE-Step) for narration projects.
+    Mood-matched to the dominant beat mood in the narration script."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
+
+    def run():
+        try:
+            pipeline._ensure_narration_music_bed(project_id)
+        except Exception as e:
+            logger.error(f"Narration music bed failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started", "message": "Narration music bed generation started"}
+
+@app.post("/api/projects/{project_id}/ltx-director")
+def ltx_director(project_id: str, db: Session = Depends(get_db)):
+    """LTX Director multi-segment engine: one continuous long video with
+    native audio + spoken dialogue, driven by the project's scene stills and
+    prompts. Safety-gated like every other generation path."""
+    project = db.query(Project).get(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    _ensure_pipeline_idle()
+    _reject_if_safety_blocked(db, project_id)
+
+    from app.services.ltx_director import LTXDirectorService
+    missing = LTXDirectorService(model_manager, settings).check_models()
+    if missing:
+        raise HTTPException(409, {"error": "models_missing", "missing": missing})
+
+    def run():
+        try:
+            pipeline.generate_ltx_director(project_id)
+        except Exception as e:
+            logger.error(f"LTX Director failed: {e}", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "started",
+            "message": "LTX Director long-video generation started"}
+
+
+@app.get("/api/projects/{project_id}/ltx-director/status")
+def ltx_director_status(project_id: str):
+    """Model availability for the LTX Director engine."""
+    from app.services.ltx_director import LTXDirectorService
+    missing = LTXDirectorService(model_manager, settings).check_models()
+    return {"ready": not missing, "missing": missing}
 
 
 @app.post("/api/projects/{project_id}/generate-tts")

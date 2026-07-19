@@ -37,6 +37,15 @@ negative_prompt_additions: "photorealistic, realistic animal fur, human, human f
 still_ratio: 0.0
 scene_type_directive: "Use scene_type 'img2vid' for EVERY scene. Each prompt describes ONE slow gentle action (slow waddling, softly splashing, ears drooping sleepily, slow stretching, gentle head tilt, drifting on water, slow blinking) plus soft ambient motion. NEVER fast action — slow reads as 'baby-cute' AND renders clean on local models."
 
+# ── Visual direction: MINIMAL STORY (user mandate 2026-07-18) ────────────────
+# Toddlers watch the SUBJECT, not a plot. Less story = better retention here.
+visual_direction:
+  - "NO STORY. Do not write a narrative arc, plot beats, stops, arrivals, or progression. The video is a loop of simple pretty clips of the hero subject."
+  - "ONE subject on screen doing ONE tiny movement per scene — e.g. the bus just driving, the cat just blinking or slowly flicking its tail, the duck just bobbing on water. Movement stays LITTLE and slow."
+  - "Most scenes (70%+) are just the HERO subject alone in slightly different framings/settings. A side character may appear in a few scenes doing a tiny idle motion — it does NOT interact, board, talk, or drive action."
+  - "NEVER stage events (picking up passengers, meeting friends, going somewhere for a reason). No cause and effect between scenes — every scene stands alone."
+  - "Vary only: camera framing, time of day light, and background scenery. Keep the subject, art style, and descriptor string identical in every prompt."
+
 # ── Content rules ─────────────────────────────────────────────────────────────
 content_rules:
   - "Lyrics: toddler vocabulary, 4-6 words per line, heavy repetition, one short chorus hook repeated top and bottom (the earworm)"

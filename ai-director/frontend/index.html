@@ -641,7 +641,33 @@ tr { cursor: pointer; }
             <input type="number" id="wiz-clips" value="5" min="1" max="100" oninput="wizHint()">
             <span id="wiz-hint" class="text-dim text-sm" style="font-size:.75rem">= 5 clips × 4.0s each</span>
           </div>
-          <div class="form-group full">
+          <div class="form-group">
+            <label>Video Type</label>
+            <select id="wiz-ptype" onchange="wizTypeChanged()">
+              <option value="song">🎵 Song Video (music + lyrics)</option>
+              <option value="narration">🎙 Narration Video (voiceover documentary / explainer)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Video Engine</label>
+            <select id="wiz-vengine">
+              <option value="clips">🎬 Clip-by-clip — 5–6s per clip, full per-scene control</option>
+              <option value="ltx_director">🎥 LTX Director — 20–30s long takes per director node, native audio/dialogue, one-shot render</option>
+            </select>
+          </div>
+          <div class="form-group hidden" id="wiz-voice-group">
+            <label>Narration Voice (Kokoro)</label>
+            <select id="wiz-voice">
+              <option value="am_michael">Michael — US male, deep documentary</option>
+              <option value="bm_george">George — UK male, classic docs</option>
+              <option value="am_fenrir">Fenrir — US male, energetic explainer</option>
+              <option value="am_puck">Puck — US male, warm storyteller</option>
+              <option value="af_heart">Heart — US female, warm (best overall)</option>
+              <option value="af_bella">Bella — US female, bright</option>
+              <option value="bf_emma">Emma — UK female</option>
+            </select>
+          </div>
+          <div class="form-group full" id="wiz-lyrics-group">
             <label>Song Lyrics (paste here — drives the music AND the scene timing; leave empty for a story video)</label>
             <textarea id="wiz-lyrics" rows="8" placeholder="[chorus]&#10;Bismillah, Bismillah, say it with a smile...&#10;&#10;[verse]&#10;..."></textarea>
           </div>
@@ -660,9 +686,29 @@ tr { cursor: pointer; }
 
       <!-- ── STEP 2: Music ── -->
       <div class="card hidden" id="wiz-s2">
-        <h3 class="flex-between"><span>2 · Music / Audio</span>
+        <h3 class="flex-between"><span id="wiz-s2-title">2 · Music / Audio</span>
           <button class="btn-outline btn-sm" onclick="wizCopyPrompt(2, this)" title="Copy a ready-made prompt for ChatGPT/Claude that generates the music style for this step">📋 Copy AI prompt</button></h3>
-        <div class="form-grid">
+
+        <!-- Narration mode panel (replaces the music form for narration projects) -->
+        <div id="wiz-narr-panel" class="hidden">
+          <p class="text-dim text-sm">The AI director writes a chaptered narration script (hook → chapters → beats), runs the <b>YouTube safety gate</b> on it, then voices it with Kokoro. The voiceover's exact timing drives every scene.</p>
+          <div class="btn-group mt-8" style="flex-wrap:wrap">
+            <button class="btn-generate" id="wiz-narr-script-btn" onclick="wizNarrScript()">🧠 Write Script + Safety Check (~3-5 min)</button>
+            <button class="btn-outline btn-sm" onclick="wizNarrSafetyCheck()">🛡 Re-run Safety Check</button>
+          </div>
+          <div id="wiz-narr-status" class="text-dim text-sm mt-8"></div>
+          <div id="wiz-narr-safety" class="mt-8"></div>
+          <div id="wiz-narr-script" class="mt-8" style="max-height:340px;overflow-y:auto"></div>
+          <div class="btn-group mt-8 hidden" id="wiz-narr-voice-row">
+            <button class="btn-primary" id="wiz-narr-voice-btn" onclick="wizNarrVoice()">🎙 Generate Voiceover + Plan Scenes</button>
+          </div>
+          <div id="wiz-narr-audio" class="mt-8"></div>
+          <div class="btn-group mt-8 hidden" id="wiz-narr-next">
+            <button class="btn-success" onclick="wizGo(3)">✓ Voiceover ready — Next: Scenes</button>
+          </div>
+        </div>
+
+        <div class="form-grid" id="wiz-music-form">
           <div class="form-group">
             <label>Music Engine</label>
             <select id="wiz-music-engine">
@@ -692,7 +738,7 @@ tr { cursor: pointer; }
             <textarea id="wiz-music-lyrics" rows="8" placeholder="[chorus]&#10;Bismillah, Bismillah, say it with a smile...&#10;&#10;[verse]&#10;..."></textarea>
           </div>
         </div>
-        <div class="btn-group mt-16">
+        <div class="btn-group mt-16" id="wiz-music-actions">
           <button class="btn-generate" id="wiz-music-btn" onclick="wizGenMusic()"><span class="btn-icon">♫</span> Generate Versions</button>
           <button class="btn-danger btn-sm hidden" id="wiz-music-pause" onclick="wizPause(this)">⏸ Pause</button>
           <button class="btn-success btn-sm hidden" id="wiz-music-resume" onclick="wizResumeMusic()">▶ Resume remaining</button>
@@ -798,8 +844,11 @@ tr { cursor: pointer; }
       <div class="card hidden" id="wiz-s5">
         <h3 class="flex-between"><span>5 · Final Video</span>
           <button class="btn-outline btn-sm" onclick="wizCopyPrompt(5, this)" title="Copy a prompt that generates YouTube title/description/tags for the finished video">📋 Copy AI prompt</button></h3>
-        <p class="text-dim text-sm">Merge all clips with the music into one video (crossfades, 1080p, QA-checked).</p>
+        <p class="text-dim text-sm" id="wiz-merge-hint">Merge all clips with the music into one video (crossfades, 1080p, QA-checked).</p>
         <div class="btn-group mt-8">
+          <button class="btn-outline hidden" id="wiz-music-bed-btn" onclick="wizNarrMusicBed()">🎵 Generate Music Bed (ACE-Step)</button>
+          <button class="btn-outline hidden" id="wiz-sfx-btn" onclick="wizNarrSFX()">🔊 Generate Synced SFX (MMAudio)</button>
+          <button class="btn-outline" id="wiz-ltxdir-btn" onclick="wizLtxDirector()" title="One continuous long video with native audio + spoken dialogue, generated from the scene stills + prompts (LTX-2.3 dev, multi-segment)">🎥 LTX Director (long video + native audio)</button>
           <button class="btn-generate" id="wiz-merge-btn" onclick="wizMerge()"><span class="btn-icon">🎬</span> Merge &amp; Render Final Video</button>
           <button class="btn-danger btn-sm hidden" id="wiz-merge-stop" onclick="wizStop()">⏹ Stop</button>
         </div>
@@ -857,6 +906,13 @@ tr { cursor: pointer; }
             <div class="form-group">
               <label>Video Model</label>
               <div id="view-video-model" class="text-sm font-semibold">—</div>
+            </div>
+            <div class="form-group">
+              <label>Video Engine</label>
+              <select id="view-video-engine" onchange="changeVideoEngine(this.value)">
+                <option value="clips">🎬 Clip-by-clip (5–6s per clip)</option>
+                <option value="ltx_director">🎥 LTX Director (20–30s takes, native audio)</option>
+              </select>
             </div>
             <div class="form-group">
               <label>LoRAs</label>
@@ -1326,6 +1382,17 @@ async function loadProjects() {
   } catch(e) { console.error(e); }
 }
 
+async function changeVideoEngine(engine) {
+  if (!currentProject) return;
+  try {
+    await api(`/api/projects/${currentProject.id}`, 'PUT', { video_engine: engine });
+    currentProject.video_engine = engine;
+  } catch(e) {
+    alert('Error: ' + e.message);
+    document.getElementById('view-video-engine').value = currentProject.video_engine || 'clips';
+  }
+}
+
 async function openProject(id) {
   try {
     currentProject = await api(`/api/projects/${id}`);
@@ -1345,6 +1412,7 @@ function renderProject() {
   document.getElementById('view-duration').textContent = `${Math.round(p.duration_target / 60)} minutes (${p.duration_target}s)`;
   document.getElementById('view-num-scenes').textContent = p.num_scenes_target || 'Auto (Default)';
   document.getElementById('view-video-model').textContent = p.video_model || 'Default';
+  document.getElementById('view-video-engine').value = p.video_engine || 'clips';
   const loraList = (p.default_lora_ids || []);
   const loraWeights = (p.default_lora_weights || []);
   document.getElementById('view-loras').textContent = loraList.length
@@ -2138,21 +2206,229 @@ function wizGo(step, silent) {
   }
   const s1next = document.getElementById('wiz-s1-next');
   if (s1next) s1next.classList.toggle('hidden', !wiz.id);
+  wizApplyMode();
+  if (step === 2 && wiz.id && wizIsNarr()) wizNarrPollScript();
   if (step === 4) wizRenderClips();
   if (step >= 2 && wiz.id) wizStartPoll();
+}
+
+// ── Narration mode ─────────────────────────────────────────────
+function wizIsNarr() {
+  return (wiz.project && wiz.project.project_type === 'narration')
+      || document.getElementById('wiz-ptype').value === 'narration';
+}
+function wizTypeChanged() {
+  const narr = document.getElementById('wiz-ptype').value === 'narration';
+  document.getElementById('wiz-voice-group').classList.toggle('hidden', !narr);
+  document.getElementById('wiz-lyrics-group').classList.toggle('hidden', narr);
+}
+function wizApplyMode() {
+  // step 2 swaps between the music form and the narration panel
+  const narr = wizIsNarr();
+  document.getElementById('wiz-s2-title').textContent = narr ? '2 · Script + Voiceover' : '2 · Music / Audio';
+  document.getElementById('wiz-narr-panel').classList.toggle('hidden', !narr);
+  ['wiz-music-form', 'wiz-music-actions', 'wiz-music-status',
+   'wiz-music-variants', 'wiz-music-next'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && narr) el.classList.add('hidden');
+    else if (el && id === 'wiz-music-form') el.classList.remove('hidden');
+    else if (el && id === 'wiz-music-actions') el.classList.remove('hidden');
+  });
+  const sfxBtn = document.getElementById('wiz-sfx-btn');
+  if (sfxBtn) sfxBtn.classList.toggle('hidden', !narr);
+  const musBedBtn = document.getElementById('wiz-music-bed-btn');
+  if (musBedBtn) musBedBtn.classList.toggle('hidden', !narr);
+  const hint = document.getElementById('wiz-merge-hint');
+  if (hint && narr) hint.textContent =
+    'Assemble all clips against the voiceover timeline (exact cuts, ducked music, synced SFX, −14 LUFS master, auto captions + chapters).';
+  const lyricsBtn = document.getElementById('wiz-scenes-lyrics-btn');
+  if (lyricsBtn) lyricsBtn.classList.toggle('hidden', narr);
+}
+
+async function wizNarrScript() {
+  if (!wiz.id) { alert('Create the project first (Step 1)'); return; }
+  const btn = document.getElementById('wiz-narr-script-btn');
+  btn.disabled = true;
+  document.getElementById('wiz-narr-status').textContent =
+    '🧠 Writing outline → chapters → beats, then running the safety gate… (LLM, ~3-5 min)';
+  try {
+    await api(`/api/projects/${wiz.id}/generate-narration-script`, 'POST');
+    wizNarrPollScript();
+  } catch(e) { alert('Error: ' + e.message); btn.disabled = false; }
+}
+
+async function wizNarrPollScript() {
+  clearTimeout(wiz.narrPoll);
+  try {
+    const r = await api(`/api/projects/${wiz.id}/narration-script`);
+    if (r.script) {
+      wizNarrRenderScript(r.script);
+      await wizNarrRenderSafety();
+      document.getElementById('wiz-narr-status').textContent = '';
+      document.getElementById('wiz-narr-script-btn').disabled = false;
+      document.getElementById('wiz-narr-voice-row').classList.remove('hidden');
+      return;
+    }
+    const p = await api(`/api/projects/${wiz.id}`);
+    if (p.status === 'failed') {
+      document.getElementById('wiz-narr-status').textContent = '❌ ' + (p.error_log || 'script failed');
+      document.getElementById('wiz-narr-script-btn').disabled = false;
+      return;
+    }
+  } catch(e) {}
+  wiz.narrPoll = setTimeout(wizNarrPollScript, 5000);
+}
+
+function wizNarrRenderScript(s) {
+  const box = document.getElementById('wiz-narr-script');
+  let html = `<div style="font-weight:600">${esc(s.title || '')}</div>
+    <div class="text-dim text-sm" style="font-style:italic">Hook: ${esc(s.hook || '')}</div>`;
+  (s.chapters || []).forEach((ch, i) => {
+    html += `<div class="mt-8" style="border-left:3px solid var(--accent);padding-left:10px">
+      <div style="font-weight:600;font-size:.85rem">Ch ${i+1}: ${esc(ch.title || '')}</div>`;
+    (ch.beats || []).forEach(b => {
+      html += `<div class="text-sm mt-8">
+        <span class="text-dim">[${esc(b.visual_type || 'broll')}${b.sfx_prompt ? ' · 🔊' : ''}]</span>
+        ${esc(b.narration_text || '')}</div>`;
+    });
+    html += `</div>`;
+  });
+  box.innerHTML = html;
+}
+
+async function wizNarrRenderSafety() {
+  const box = document.getElementById('wiz-narr-safety');
+  try {
+    const r = await api(`/api/projects/${wiz.id}/safety-report`);
+    if (!r.verdict) { box.innerHTML = ''; return r; }
+    const rep = r.reports[0];
+    const color = {pass:'var(--success)', override:'var(--success)',
+                   revise:'#e6a817', block:'var(--danger, #e05555)'}[r.verdict] || 'var(--text)';
+    let html = `<div style="border:1px solid ${color};border-radius:8px;padding:10px">
+      <div style="font-weight:700;color:${color}">🛡 YouTube Safety: ${r.verdict.toUpperCase()}</div>`;
+    if ((rep.auto_revisions || []).length)
+      html += `<div class="text-sm text-dim">${rep.auto_revisions.length} sentence(s) auto-fixed by the gate</div>`;
+    (rep.issues || []).slice(0, 8).forEach(i => {
+      html += `<div class="text-sm mt-8">• <b>[${esc(i.severity)}/${esc(i.category)}]</b> ${esc(i.where)}: ${esc(i.detail)}
+        ${i.suggestion ? `<span class="text-dim">→ ${esc(i.suggestion)}</span>` : ''}</div>`;
+    });
+    if (['revise','block'].includes(r.verdict))
+      html += `<div class="btn-group mt-8">
+        <button class="btn-outline btn-sm" onclick="wizNarrOverride()">Override with note (recorded)</button>
+      </div>`;
+    html += `</div>`;
+    box.innerHTML = html;
+    return r;
+  } catch(e) { box.innerHTML = ''; return null; }
+}
+
+async function wizNarrSafetyCheck() {
+  if (!wiz.id) return;
+  document.getElementById('wiz-narr-status').textContent = '🛡 Running safety gate (LLM critic)…';
+  try {
+    await api(`/api/projects/${wiz.id}/safety-check`, 'POST');
+    const poll = async () => {
+      const r = await wizNarrRenderSafety();
+      if (!r || !r.verdict) { setTimeout(poll, 5000); return; }
+      document.getElementById('wiz-narr-status').textContent = '';
+    };
+    setTimeout(poll, 8000);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function wizNarrOverride() {
+  const note = prompt('Override note (why is this safe to publish?) — recorded in the audit trail:');
+  if (!note) return;
+  try {
+    await api(`/api/projects/${wiz.id}/safety-override`, 'POST', { note });
+    wizNarrRenderSafety();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function wizNarrVoice() {
+  const btn = document.getElementById('wiz-narr-voice-btn');
+  btn.disabled = true;
+  document.getElementById('wiz-narr-status').textContent =
+    '🎙 Kokoro voicing every beat + WER QA + planning scenes…';
+  try {
+    await api(`/api/projects/${wiz.id}/generate-narration-audio`, 'POST');
+    const poll = async () => {
+      try {
+        const t = await api(`/api/projects/${wiz.id}/narration-timing`);
+        if (t.timing) {
+          const bad = (t.timing.beats || []).filter(b => b.wer > 0.12).length;
+          document.getElementById('wiz-narr-audio').innerHTML =
+            `<audio controls style="width:100%" src="/projects/${wiz.id}/narration/narration_master.wav"></audio>
+             <div class="text-sm text-dim mt-8">${t.timing.duration.toFixed(1)}s · ${t.timing.beats.length} beats
+             ${bad ? ` · ⚠ ${bad} beat(s) flagged by pronunciation QA` : ' · ✓ QA clean'}</div>`;
+          document.getElementById('wiz-narr-status').textContent = '';
+          document.getElementById('wiz-narr-next').classList.remove('hidden');
+          btn.disabled = false;
+          return;
+        }
+        const p = await api(`/api/projects/${wiz.id}`);
+        if (p.status === 'failed') {
+          document.getElementById('wiz-narr-status').textContent = '❌ ' + (p.error_log || 'voicing failed');
+          btn.disabled = false; return;
+        }
+      } catch(e) {}
+      setTimeout(poll, 4000);
+    };
+    setTimeout(poll, 4000);
+  } catch(e) { alert('Error: ' + e.message); btn.disabled = false; }
+}
+
+async function wizLtxDirector() {
+  if (!wiz.id) return;
+  try {
+    const st = await api(`/api/projects/${wiz.id}/ltx-director/status`);
+    if (!st.ready) {
+      alert('LTX Director models still missing:\n' + st.missing.join('\n'));
+      return;
+    }
+    if (!confirm('LTX Director renders the WHOLE video in one continuous pass with native audio + spoken dialogue. This is the heaviest job in the app (can run for hours). Start?')) return;
+    await api(`/api/projects/${wiz.id}/ltx-director`, 'POST');
+    document.getElementById('wiz-merge-status').textContent =
+      '🎥 LTX Director is generating the full video with native audio — watch progress above.';
+    wizStartPoll();
+  } catch(e) { alert('Error: ' + (e.message || JSON.stringify(e))); }
+}
+
+async function wizNarrSFX() {
+  if (!wiz.id) return;
+  document.getElementById('wiz-merge-status').textContent =
+    '🔊 MMAudio is watching each clip and generating synced sound effects…';
+  try {
+    await api(`/api/projects/${wiz.id}/generate-sfx`, 'POST');
+    wizStartPoll();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function wizNarrMusicBed() {
+  if (!wiz.id) return;
+  document.getElementById('wiz-merge-status').textContent =
+    '🎵 Generating instrumental music bed via ACE-Step (mood-matched to your narration)…';
+  try {
+    await api(`/api/projects/${wiz.id}/generate-narration-music`, 'POST');
+    wizStartPoll();
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 async function wizCreate(fullAuto) {
   const title = document.getElementById('wiz-title').value.trim();
   if (!title) { alert('Enter a title'); return; }
+  const isNarr = document.getElementById('wiz-ptype').value === 'narration';
   const body = {
     title,
     channel_slug: document.getElementById('wiz-channel').value,
     duration: parseInt(document.getElementById('wiz-duration').value) || 20,
     num_scenes: parseInt(document.getElementById('wiz-clips').value) || 5,
     context: document.getElementById('wiz-context').value,
-    lyrics: document.getElementById('wiz-lyrics').value.trim() || null,
+    lyrics: isNarr ? null : (document.getElementById('wiz-lyrics').value.trim() || null),
     music_style: document.getElementById('wiz-music-style').value.trim() || null,
+    video_engine: document.getElementById('wiz-vengine').value,
+    project_type: isNarr ? 'narration' : 'song',
+    narration_voice: isNarr ? document.getElementById('wiz-voice').value : null,
   };
   try {
     const r = await api('/api/projects', 'POST', body);
@@ -2165,9 +2441,9 @@ async function wizCreate(fullAuto) {
       await api(`/api/projects/${r.id}/full-auto`, 'POST');
       openProject(r.id);   // watch it live on the project page
     } else {
-      // sensible default music style from the brief
+      // sensible default music style from the brief (song mode only)
       const styleEl = document.getElementById('wiz-music-style');
-      if (!styleEl.value) styleEl.value = "cheerful children's nursery rhyme, sweet clear female lead vocal with cute kids choir answering, bouncy playful melody, ukulele strums, glockenspiel, marimba, soft hand claps, light kick drum, bright major key, catchy repetitive sing-along chorus hook, call and response, wholesome kids pop, professional studio mix, clean bright master, 100 bpm";
+      if (!styleEl.value && !isNarr) styleEl.value = "cheerful children's nursery rhyme, sweet clear female lead vocal with cute kids choir answering, bouncy playful melody, ukulele strums, glockenspiel, marimba, soft hand claps, light kick drum, bright major key, catchy repetitive sing-along chorus hook, call and response, wholesome kids pop, professional studio mix, clean bright master, 100 bpm";
       wizGo(2);
     }
   } catch(e) { alert('Error: ' + e.message); }
@@ -2866,6 +3142,12 @@ async function openWizard(id) {
     document.getElementById('wiz-music-lyrics').value = p.lyrics || '';
     document.getElementById('wiz-music-style').value = p.music_style || '';
     wizHint();
+    // narration mode: restore the type/voice selectors
+    if (p.project_type === 'narration') {
+      document.getElementById('wiz-ptype').value = 'narration';
+      if (p.narration_voice) document.getElementById('wiz-voice').value = p.narration_voice;
+      wizTypeChanged();
+    }
     // infer the resume step
     const scenes = p.scenes || [];
     const anyClips = scenes.some(s => ['generated','approved'].includes(s.status));

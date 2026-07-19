@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 class PipelinePhase(str, Enum):
     IDLE = "idle"
     SCRIPTING = "scripting"
+    SAFETY = "safety"
     TTS = "tts"
     GENERATING = "generating"
     UPSCALING = "upscaling"
@@ -84,6 +85,12 @@ class PipelineOrchestrator:
         self.assembler = AssemblerService(config)
         self.music_gen = MusicGenService(model_manager, config)
         self.tts = TTSService(config)
+        from app.services.yt_safety import SafetyGateService
+        self.safety = SafetyGateService(model_manager, config)
+        from app.services.narration_writer import NarrationWriterService
+        self.narration_writer = NarrationWriterService(model_manager, config)
+        from app.services.template_renderer import TemplateRenderer
+        self.template_renderer = TemplateRenderer(model_manager, config)
 
         self._progress = PipelineProgress()
         self._progress_callbacks: list[Callable[[PipelineProgress], None]] = []
@@ -321,6 +328,192 @@ class PipelineOrchestrator:
             self.manager.unload()
             session.close()
 
+    # ── Phase 1n: Narration Script (narration mode) ────────────────────
+
+    def generate_narration_script(self, project_id: str) -> dict:
+        """Narration mode phase 1: two-pass script write (outline → beats),
+        then the universal safety gate WHILE the LLM is still resident (the
+        critic reuses the loaded model — no second 27B load). Saves to
+        Project.narration_script."""
+        import json as _json
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+            channel_slug = project.channel.slug
+            title, duration = project.title, project.duration_target
+            context = project.context or ""
+        finally:
+            session.close()
+
+        self._emit_progress(
+            phase=PipelinePhase.SCRIPTING, project_id=project_id,
+            message="Writing narration script (outline → chapters → beats)...")
+
+        try:
+            script = self.narration_writer.write(
+                topic=title, duration_sec=duration,
+                context=context, channel_slug=channel_slug,
+                unload_after=False,   # safety critic reuses the resident LLM
+            )
+
+            session = get_session()
+            try:
+                project = session.query(Project).get(project_id)
+                project.project_type = "narration"
+                project.narration_script = _json.dumps(script, ensure_ascii=False)
+                # mirror the SEO block into script_raw so the existing
+                # release-assets writer (metadata.json) works unchanged
+                seo = script.get("seo", {})
+                project.script_raw = _json.dumps({
+                    "description": seo.get("description", ""),
+                    "tags": seo.get("tags", []),
+                    "hashtags": seo.get("hashtags", []),
+                    "thumbnail_prompt": seo.get("thumbnail_prompt", ""),
+                })
+                if script.get("title"):
+                    project.title = script["title"]
+                project.status = ProjectStatus.SCRIPTED
+                session.commit()
+            finally:
+                session.close()
+
+            # Universal safety gate on the fresh script (LLM already loaded)
+            self._emit_progress(
+                phase=PipelinePhase.SAFETY, project_id=project_id,
+                message="YT safety gate: reviewing narration + metadata...")
+            gate = self.safety.run_gate(project_id, use_llm=True,
+                                        auto_revise=True, unload_after=True)
+
+            n_beats = sum(len(c.get("beats", [])) for c in script.get("chapters", []))
+            self._emit_progress(
+                phase=PipelinePhase.IDLE, project_id=project_id, percent=100.0,
+                message=f"Narration script ready: {len(script.get('chapters', []))} "
+                        f"chapters, {n_beats} beats — safety: {gate.verdict}")
+            return script
+        except Exception as e:
+            logger.error(f"[Pipeline] Narration scripting failed: {e}", exc_info=True)
+            session = get_session()
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = str(e)
+                    session.commit()
+            finally:
+                session.close()
+            self._emit_progress(phase=PipelinePhase.ERROR, error=str(e),
+                                message=f"Narration scripting failed: {e}")
+            raise
+        finally:
+            try:
+                self.manager.unload()
+            except Exception:
+                pass
+
+    # ── Phase 2n: Narration Audio + Beat Planning (narration mode) ─────
+
+    def generate_narration_audio(self, project_id: str) -> str:
+        """Narration mode phase 2: Kokoro master WAV (sample-accurate beat
+        offsets + transcribe-back QA) → beat planner → Scene rows with exact
+        (narration_start, narration_end). Returns the master WAV path."""
+        import json as _json
+        from app.services import narration_scenes
+
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+            if not project.narration_script:
+                raise ValueError("No narration script — run generate-narration-script first")
+            script = _json.loads(project.narration_script)
+            voice = project.narration_voice or self.config.tts.kokoro_voice
+            channel_slug = project.channel.slug
+        finally:
+            session.close()
+
+        beats = narration_scenes.flatten_beats(script)
+        beats_for_tts = [{"text": b["text"],
+                          "chapter_index": b["chapter_index"],
+                          "chapter_break": b["chapter_break"]} for b in beats]
+
+        self._emit_progress(
+            phase=PipelinePhase.TTS, project_id=project_id,
+            message=f"Voicing {len(beats_for_tts)} beats with Kokoro/Chatterbox ({voice})...")
+
+        # Determine if we have a custom voice reference for Chatterbox cloning
+        voice_ref = None
+        try:
+            profile = self.director.load_channel_profile(channel_slug) or {}
+            voice_ref = profile.get("narration", {}).get("voice_ref")
+            if voice_ref and not Path(voice_ref).is_absolute():
+                voice_ref = str(self.config.paths.assets_dir / "voices" / voice_ref)
+        except Exception:
+            pass
+
+        project_dir = self.config.paths.projects_dir / project_id
+        try:
+            master = self.tts.generate_narration_master(
+                beats_for_tts, str(project_dir), voice=voice, voice_ref=voice_ref)
+        finally:
+            # Kokoro + whisper are small but the video phase wants every MB
+            try:
+                self.tts.unload_engines()
+            except Exception:
+                pass
+
+        # Plan scenes against the REAL narration timeline
+        timing = _json.loads(Path(master.timing_json).read_text(encoding="utf-8"))
+        profile = {}
+        try:
+            profile = self.director.load_channel_profile(channel_slug) or {}
+        except Exception:
+            pass
+
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            cap = self._max_clip_seconds(project.video_model)
+            assets_dir = self.config.paths.projects_dir / project_id / "assets_in"
+            planned = narration_scenes.plan_scenes(
+                script, timing["beats"], master.duration, profile, cap, assets_dir=assets_dir)
+
+            session.query(Scene).filter(Scene.project_id == project_id).delete()
+            for p in planned:
+                session.add(Scene(
+                    project_id=project_id,
+                    scene_number=p["scene_number"],
+                    scene_type=SceneType(p["scene_type"]),
+                    prompt=p["prompt"],
+                    negative_prompt=p["negative_prompt"],
+                    duration=p["duration"],
+                    camera_motion=p["camera_motion"],
+                    narration_text=p["narration_text"],
+                    narration_start=p["narration_start"],
+                    narration_end=p["narration_end"],
+                    visual_type=p["visual_type"],
+                    sfx_prompt=p["sfx_prompt"],
+                    director_notes=p["director_notes"],
+                    status=SceneStatus.PENDING,
+                ))
+            project.narration_audio_path = master.audio_path
+            project.total_scenes = len(planned)
+            project.completed_scenes = 0
+            project.status = ProjectStatus.APPROVED
+            session.commit()
+        finally:
+            session.close()
+
+        bad = [b for b in master.beats if b.wer > self.config.tts.wer_flag_threshold]
+        self._emit_progress(
+            phase=PipelinePhase.IDLE, project_id=project_id, percent=100.0,
+            message=f"Narration ready: {master.duration:.0f}s, "
+                    f"{len(planned)} scenes planned"
+                    + (f" — {len(bad)} beat(s) flagged by WER QA" if bad else ""))
+        return master.audio_path
+
     # ── Phase 1b: Scenes from Lyrics (no LLM — instant, beat-synced) ────
 
     def generate_scenes_from_lyrics(self, project_id: str, num_clips: Optional[int] = None) -> int:
@@ -486,9 +679,43 @@ class PipelineOrchestrator:
 
     # ── Phase 3: Asset Generation ──────────────────────────────────────
 
+    def ensure_safety(self, project_id: str, use_llm: bool = True):
+        """UNIVERSAL YT-safety gate — every project type, before ANY GPU spend.
+
+        Honors the latest stored SafetyReport (pass/override lets generation
+        run); with no report on file it runs the gate now. Raises SafetyBlocked
+        on block/revise. Kill switch: AIDIR_SAFETY_ENFORCE=0."""
+        if os.environ.get("AIDIR_SAFETY_ENFORCE", "1") == "0":
+            return
+        from app.services import yt_safety
+        session = get_session()
+        try:
+            verdict = yt_safety.latest_verdict(session, project_id)
+        finally:
+            session.close()
+
+        if verdict is None:
+            self._emit_progress(
+                phase=PipelinePhase.SAFETY, project_id=project_id,
+                message="Running YouTube safety gate on the script...")
+            result = self.safety.run_gate(project_id, use_llm=use_llm)
+            verdict = result.verdict
+
+        if verdict in ("pass", "override"):
+            return
+        self._emit_progress(
+            phase=PipelinePhase.ERROR, project_id=project_id, error="safety",
+            message=f"Safety gate verdict '{verdict}' — generation blocked. "
+                    f"Review the safety report, fix or override, then retry.")
+        raise SafetyBlocked(
+            f"YT-safety gate verdict is '{verdict}' — fix the flagged issues "
+            f"(GET /api/projects/{project_id}/safety-report), re-run the check, "
+            f"or record a manual override before generating.")
+
     def start_generation(self, project_id: str, scene_ids: Optional[list[str]] = None, width: Optional[int] = None, height: Optional[int] = None, batch: bool = False, upscale_inline: bool = False):
         with self._exclusive("generation"):
             self._progress.project_id = project_id  # run_state.json journal target
+            self.ensure_safety(project_id)
             return self._start_generation_impl(
                 project_id, scene_ids=scene_ids, width=width, height=height,
                 batch=batch, upscale_inline=upscale_inline)
@@ -1179,6 +1406,52 @@ class PipelineOrchestrator:
                     gen.seed = img_result.seed
                     gen.generation_time_sec = img_result.generation_time + result.generation_time
                     gen.thumbnail_path = img_result.path
+
+            elif scene.scene_type == SceneType.TEMPLATE:
+                logger.info(f"[Pipeline] Scene {scene.scene_number}: generating motion-graphics template for {scene.visual_type}")
+                profile = self.director.load_channel_profile(project.channel.slug) if project.channel else None
+                result_path = self.template_renderer.render_clip(
+                    visual_type=scene.visual_type,
+                    visual_prompt=scene.prompt,
+                    output_path=str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4"),
+                    duration=scene.duration,
+                    fps=self.config.video.default_fps,
+                    width=width or 1920,
+                    height=height or 1080,
+                    profile=profile,
+                )
+                gen.model_used = f"template:{scene.visual_type}"
+                gen.output_path = result_path
+                gen.seed = 0
+                gen.generation_time_sec = 0.0
+
+            elif scene.scene_type == SceneType.USER_ASSET:
+                asset_path = scene.director_notes.get("user_asset_path")
+                logger.info(f"[Pipeline] Scene {scene.scene_number}: processing user asset: {asset_path}")
+                output_path = str(clips_dir / f"scene_{scene.scene_number:03d}_v{version}.mp4")
+                
+                # Use ffmpeg to scale/pad the user's asset to the exact dimensions and duration
+                ffmpeg = str(self.config.paths.ffmpeg_bin)
+                w, h = width or 1920, height or 1080
+                fps = self.config.video.default_fps
+                cmd = [
+                    ffmpeg, "-y", "-i", str(asset_path),
+                    "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}",
+                    "-t", f"{scene.duration:.3f}",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                    "-pix_fmt", "yuv420p", "-an",
+                    output_path,
+                ]
+                import subprocess, time
+                t0 = time.time()
+                r = subprocess.run(cmd, capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise RuntimeError(f"User asset processing failed: {r.stderr[-300:]}")
+                
+                gen.model_used = "user_asset"
+                gen.output_path = output_path
+                gen.seed = 0
+                gen.generation_time_sec = time.time() - t0
 
             else:
                 raise ValueError(f"Unknown scene type: {scene.scene_type}")
@@ -2310,6 +2583,625 @@ class PipelineOrchestrator:
         finally:
             session.close()
 
+    # ── Narration mode: music bed helper ─────────────────────────────
+
+    # Mood → instrumental ACE-Step style hints (keeps things tasteful
+    # under a narration — never competes with the voice).
+    _MOOD_MUSIC = {
+        "curious":  "light plucked acoustic guitar, gentle piano chords, "
+                    "inquisitive feeling, subtle celesta",
+        "tense":    "low cello drone, sparse dark synth pads, suspenseful "
+                    "atmosphere, slow heartbeat pulse",
+        "warm":     "soft fingerpicked acoustic guitar, gentle strings swell, "
+                    "cozy warm folk feel, muted percussion",
+        "epic":     "slow orchestral build, deep brass, cinematic strings, "
+                    "timpani rumble, epic documentary score",
+        "neutral":  "minimal ambient pad, soft piano, clean and transparent, "
+                    "corporate background music",
+    }
+
+    def _narration_music_prompt(self, project_id: str) -> str:
+        """Build an instrumental ACE-Step prompt from the narration script's
+        dominant mood.  Falls back to a generic documentary bed."""
+        import json as _json
+        from collections import Counter
+        session = get_session()
+        try:
+            p = session.query(Project).get(project_id)
+            script = _json.loads(p.narration_script or "{}") if p else {}
+        finally:
+            session.close()
+
+        moods = Counter()
+        style = script.get("style", "explainer")
+        for ch in script.get("chapters", []):
+            for b in ch.get("beats", []):
+                moods[b.get("mood", "neutral")] += 1
+
+        dominant = moods.most_common(1)[0][0] if moods else "neutral"
+        base = self._MOOD_MUSIC.get(dominant, self._MOOD_MUSIC["neutral"])
+
+        # Style-level flavour
+        if style == "documentary":
+            base += ", documentary score, real instruments, cinematic"
+        elif style == "tutorial":
+            base += ", clean lo-fi study beat, soft keyboard"
+        else:
+            base += ", modern explainer background music"
+
+        return (f"{base}, instrumental only, no vocals, no singing, "
+                f"no lyrics, background underscore, mix-friendly, "
+                f"no drums overpowering, low energy")
+
+    def _ensure_narration_music_bed(self, project_id: str):
+        """Generate an instrumental music bed for a narration project if none
+        exists. Follows the same precedence as song mode:
+        user-supplied file → existing MusicTrack → ACE-Step generate."""
+        # 1. user-supplied music wins
+        user_music = self._find_user_audio(project_id, "music")
+        if user_music:
+            logger.info(f"[Pipeline] Narration using user-supplied music: "
+                        f"{user_music}")
+            return
+
+        # 2. existing active track (resume case)
+        session = get_session()
+        try:
+            existing = session.query(MusicTrack).filter(
+                MusicTrack.project_id == project_id,
+                MusicTrack.is_active == True,
+            ).first()
+            if existing and existing.output_path and \
+                    Path(existing.output_path).exists():
+                logger.info(f"[Pipeline] Narration reusing existing music: "
+                            f"{existing.output_path}")
+                return
+            # grab duration for the prompt
+            project = session.query(Project).get(project_id)
+            dur = int(project.duration_target) + 5 if project else 120
+        finally:
+            session.close()
+
+        # 3. generate via ACE-Step (instrumental, mood-matched)
+        style_prompt = self._narration_music_prompt(project_id)
+        logger.info(f"[Pipeline] Generating narration music bed: "
+                    f"'{style_prompt[:80]}…'")
+        self.generate_music(
+            project_id,
+            style=style_prompt,
+            lyrics="",
+            vocals=False,
+        )
+
+    # ── Narration mode: duration-exact render ──────────────────────────
+
+    def render_narration(self, project_id: str, resolution: Optional[str] = None):
+        with self._exclusive("render"):
+            self._progress.project_id = project_id
+            return self._render_narration_impl(project_id, resolution)
+
+    def _render_narration_impl(self, project_id: str, resolution: Optional[str] = None):
+        """Narration-mode assembly: every scene trimmed to its exact
+        narration window (straight cuts), 4-bus mix (VO / ducked music /
+        per-beat SFX), −14 LUFS master, word-level SRT + chapter markers."""
+        import json as _json
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+            if not project.narration_audio_path or \
+                    not Path(project.narration_audio_path).exists():
+                raise ValueError("No narration master WAV — run narration audio first")
+
+            scenes = session.query(Scene).filter(
+                Scene.project_id == project_id,
+                Scene.status.in_([SceneStatus.GENERATED, SceneStatus.APPROVED]),
+            ).order_by(Scene.scene_number).all()
+
+            project.status = ProjectStatus.ASSEMBLING
+            session.commit()
+            self._emit_progress(
+                phase=PipelinePhase.ASSEMBLING, project_id=project_id,
+                message="Assembling narration video (duration-exact)...")
+
+            blocks, sfx_tracks = [], []
+            for scene in scenes:
+                gen = scene.active_generation
+                if not gen:
+                    continue
+                clip = gen.upscaled_path or gen.output_path
+                if not (clip and Path(clip).exists()):
+                    continue
+                blocks.append({
+                    "path": clip,
+                    "duration": float(scene.duration or 5.0),
+                    "offset": float(scene.narration_start or 0.0),
+                    "is_template": scene.scene_type == SceneType.TEMPLATE,
+                })
+                notes = scene.director_notes or {}
+                sfx_path = notes.get("sfx_path")
+                if sfx_path and Path(sfx_path).exists():
+                    sfx_tracks.append({
+                        "path": sfx_path,
+                        "offset": float(scene.narration_start or 0.0),
+                        "gain_db": float(notes.get("sfx_gain_db", -14.0)),
+                    })
+            if not blocks:
+                raise ValueError("No clips available for narration assembly")
+
+            # optional music bed (ambience under the voice)
+            music_path = None
+            active_music = session.query(MusicTrack).filter(
+                MusicTrack.project_id == project_id,
+                MusicTrack.is_active == True,
+            ).first()
+            if active_music and active_music.output_path and \
+                    Path(active_music.output_path).exists():
+                music_path = active_music.output_path
+
+            project_dir = self.config.paths.projects_dir / project_id
+            project_dir.mkdir(parents=True, exist_ok=True)
+            output_path = str(project_dir / "final_render.mp4")
+            out_resolution = resolution or project.channel.target_resolution
+
+            result = self.assembler.assemble_narration(
+                blocks=blocks,
+                output_path=output_path,
+                narration_path=project.narration_audio_path,
+                music_path=music_path,
+                sfx_tracks=sfx_tracks,
+                resolution=out_resolution,
+            )
+
+            session.add(RenderJob(
+                project_id=project_id, resolution=out_resolution,
+                output_path=result.output_path, status=RenderStatus.COMPLETED,
+                progress_pct=100.0,
+                render_settings={
+                    "mode": "narration",
+                    "total_duration": result.total_duration,
+                    "file_size_mb": result.file_size_mb,
+                    "render_time": result.render_time,
+                    "clip_count": len(blocks),
+                    "sfx_count": len(sfx_tracks),
+                    "music_bed": bool(music_path),
+                }))
+            project.output_path = result.output_path
+            project.status = ProjectStatus.RENDERED
+
+            # QA: duration must track the narration master (<0.5s drift)
+            try:
+                from app.services import qa as qa_svc
+                from dataclasses import asdict as _asdict
+                narr_dur = self.tts._get_audio_duration(project.narration_audio_path)
+                drift = abs(result.total_duration - narr_dur)
+                self._qa_notes["narration_sync"] = {
+                    "narration_sec": round(narr_dur, 2),
+                    "video_sec": round(result.total_duration, 2),
+                    "drift_sec": round(drift, 3),
+                    "ok": drift < 0.5,
+                }
+                if drift >= 0.5:
+                    logger.warning(f"[QA] Narration/video drift {drift:.2f}s")
+                final_qa = qa_svc.check_final(
+                    self.config.paths.ffmpeg_bin, result.output_path,
+                    narr_dur, expect_audio=True)
+                self._qa_notes["final"] = _asdict(final_qa)
+                qa_svc.write_report(project_dir, self._qa_notes)
+            except Exception as qa_err:
+                logger.warning(f"[QA] narration final check failed: {qa_err}")
+
+            # word-level SRT + chapter markers from the timing sidecar
+            try:
+                self._write_narration_srt_and_chapters(project, project_dir)
+            except Exception as srt_err:
+                logger.warning(f"[Release] narration srt/chapters failed: {srt_err}")
+
+            self._write_release_assets(
+                project, project_dir, result.output_path,
+                result.total_duration, out_resolution)
+            self.write_production_report(session, project, project_dir, {
+                "total_duration": result.total_duration,
+                "file_size_mb": result.file_size_mb,
+                "render_time": result.render_time,
+                "resolution": out_resolution,
+            })
+            session.commit()
+
+            self._emit_progress(
+                phase=PipelinePhase.DONE, project_id=project_id, percent=100.0,
+                message=f"Narration render complete: {result.total_duration:.0f}s, "
+                        f"{result.file_size_mb:.1f}MB")
+        except Exception as e:
+            logger.error(f"[Pipeline] Narration render failed: {e}", exc_info=True)
+            try:
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = str(e)
+                    session.commit()
+            except Exception:
+                pass
+            self._emit_progress(phase=PipelinePhase.ERROR, error=str(e),
+                                message=f"Narration render failed: {e}")
+            raise
+        finally:
+            session.close()
+
+    def _write_narration_srt_and_chapters(self, project, project_dir: Path):
+        """final_render.srt from word timestamps (caption-sized lines) +
+        chapters.txt ("00:00 Title" per line, ready for the description)."""
+        import json as _json
+        timing_path = project_dir / "narration" / "narration_timing.json"
+        if not timing_path.exists():
+            return
+        timing = _json.loads(timing_path.read_text(encoding="utf-8"))
+
+        def ts(sec: float) -> str:
+            ms = int(round(sec * 1000))
+            h, rem = divmod(ms, 3600000)
+            m, rem = divmod(rem, 60000)
+            s, ms = divmod(rem, 1000)
+            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+        # group words into caption lines (≤42 chars or ≥3.5s per cue)
+        words = timing.get("words", [])
+        cues, cur, cur_start = [], [], None
+        for w in words:
+            if cur_start is None:
+                cur_start = w["start"]
+            cur.append(w)
+            line = " ".join(x["word"] for x in cur)
+            if len(line) >= 42 or (w["end"] - cur_start) >= 3.5:
+                cues.append((cur_start, w["end"], line))
+                cur, cur_start = [], None
+        if cur:
+            cues.append((cur_start, cur[-1]["end"],
+                         " ".join(x["word"] for x in cur)))
+
+        if cues:
+            srt_lines = []
+            for i, (a, b, text) in enumerate(cues, 1):
+                srt_lines += [str(i), f"{ts(a)} --> {ts(b)}", text, ""]
+            (project_dir / "final_render.srt").write_text(
+                "\n".join(srt_lines), encoding="utf-8")
+            logger.info(f"[Release] narration SRT: {len(cues)} cues")
+
+        # chapter markers
+        try:
+            from app.services import narration_scenes
+            script = _json.loads(project.narration_script or "{}")
+            markers = narration_scenes.chapter_markers(script, timing.get("beats", []))
+            if markers:
+                # YouTube needs the first chapter at 00:00
+                if markers[0][0] > 0.01:
+                    markers.insert(0, (0.0, "Intro"))
+                lines = []
+                for start, title in markers:
+                    m, s = divmod(int(start), 60)
+                    lines.append(f"{m:02d}:{s:02d} {title}")
+                (project_dir / "chapters.txt").write_text(
+                    "\n".join(lines), encoding="utf-8")
+                logger.info(f"[Release] chapters.txt: {len(lines)} chapters")
+        except Exception as ch_err:
+            logger.warning(f"[Release] chapters failed: {ch_err}")
+
+    # ── Narration mode: full auto ──────────────────────────────────────
+
+    def run_full_auto_narration(self, project_id: str):
+        """Narration mode end-to-end: script+safety → narration audio+scenes
+        → visuals (batch) → upscale → SFX (if available) → render. Resumable:
+        each phase is skipped when its artifact already exists."""
+        with self._exclusive("full-auto"):
+            self._progress.project_id = project_id
+            return self._run_full_auto_narration_impl(project_id)
+
+    def _run_full_auto_narration_impl(self, project_id: str):
+        logger.info(f"[Pipeline] Full-auto NARRATION run for {project_id}")
+        try:
+            from app.services import qa as qa_svc
+            self._qa_notes = {"scenes": []}
+            pf = qa_svc.preflight(self.config)
+            self._qa_notes["preflight"] = pf.to_dict()
+            if not pf.ok:
+                self._emit_progress(phase=PipelinePhase.ERROR, error="preflight",
+                                    message=f"Preflight failed: {pf.summary()}")
+                return
+
+            session = get_session()
+            project = session.query(Project).get(project_id)
+            has_script = bool(project.narration_script)
+            has_audio = bool(project.narration_audio_path and
+                             Path(project.narration_audio_path).exists())
+            has_scenes = session.query(Scene).filter(
+                Scene.project_id == project_id).count() > 0
+            session.close()
+
+            # Phase 1: script (includes the universal safety gate)
+            if not has_script:
+                self.generate_narration_script(project_id)
+            # Safety enforcement even when the script pre-exists
+            self.ensure_safety(project_id)
+
+            # Phase 2: narration master + beat-planned scenes
+            if not (has_audio and has_scenes):
+                self.generate_narration_audio(project_id)
+
+            # Engine routing: LTX Director renders the whole video natively
+            # (narration lines become spoken dialogue per segment).
+            if self._project_video_engine(project_id) == "ltx_director":
+                logger.info("[Pipeline] video_engine=ltx_director (narration) → "
+                            "stills batch + one-shot multi-director render")
+                self._ensure_scene_stills(project_id)
+                self.generate_ltx_director(project_id)
+                return
+
+            # Phase 3: visuals — batch mode, VRAM-safe resolution
+            session = get_session()
+            p = session.query(Project).get(project_id)
+            inline = bool(getattr(p, "upscale_inline", True))
+            session.close()
+            self.start_generation(project_id, width=832, height=480,
+                                  batch=True, upscale_inline=inline)
+
+            # Phase 4: upscale stragglers
+            try:
+                self.start_upscale(project_id)
+            except Exception as up_err:
+                logger.warning(f"[Pipeline] Upscale failed (continuing): {up_err}")
+
+            # Phase 5: per-clip SFX (best-effort; needs MMAudio installed)
+            try:
+                self.generate_sfx(project_id)
+            except Exception as sfx_err:
+                logger.warning(f"[Pipeline] SFX pass skipped: {sfx_err}")
+
+            # Phase 5b: instrumental music bed (ACE-Step)
+            try:
+                self._ensure_narration_music_bed(project_id)
+            except Exception as mus_err:
+                logger.warning(f"[Pipeline] Music bed skipped: {mus_err}")
+
+            # Phase 6: duration-exact render + captions + release assets
+            self.render_narration(project_id)
+            logger.info(f"[Pipeline] Narration full-auto complete: {project_id}")
+
+        except PipelinePaused:
+            logger.info(f"[Pipeline] Narration run paused for {project_id}")
+        except SafetyBlocked as sb:
+            logger.warning(f"[Pipeline] {sb}")
+        except Exception as e:
+            logger.error(f"[Pipeline] Narration full-auto failed: {e}", exc_info=True)
+            self._emit_progress(phase=PipelinePhase.ERROR, error=str(e),
+                                message=f"Pipeline failed: {e}")
+
+    def _project_video_engine(self, project_id: str) -> str:
+        """Per-project generation engine: 'clips' (default, one 5-6s ComfyUI
+        job per scene) or 'ltx_director' (multi-director one-shot workflow)."""
+        session = get_session()
+        try:
+            p = session.query(Project).get(project_id)
+            return (getattr(p, "video_engine", None) or "clips") if p else "clips"
+        finally:
+            session.close()
+
+    def _ensure_scene_stills(self, project_id: str):
+        """Guarantee every scene has a reference still (batch image phase) —
+        the LTX Director engine attaches one still per segment, so all scenes
+        need an image before the workflow is built."""
+        session = get_session()
+        try:
+            scenes = session.query(Scene).filter(
+                Scene.project_id == project_id,
+            ).order_by(Scene.scene_number).all()
+            images_dir = self.config.paths.projects_dir / project_id / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            self._pregenerated_stills = {}
+            # 16:9 stills — the director crops references to 1280x720, so
+            # matching aspect avoids losing composition
+            self._pre_generate_stills(scenes, images_dir, session,
+                                      width=1280, height=720)
+        finally:
+            session.close()
+
+    def _mux_song_over_ltx(self, project_id: str):
+        """Song projects on the LTX Director engine: the pipeline's normal
+        music phase (user file > existing active track > generate), then the
+        song replaces the director video's native audio in final_render.mp4."""
+        import subprocess
+        session = get_session()
+        project = session.query(Project).get(project_id)
+        ptype = getattr(project, "project_type", "song") if project else "song"
+        video_path = project.output_path if project else None
+        session.close()
+        if ptype != "song":
+            return
+        if not video_path or not Path(video_path).exists():
+            raise RuntimeError("LTX Director video missing — cannot mux song")
+
+        # Music: user file > existing generated track (resume) > generate
+        music_path = self._find_user_audio(project_id, "music")
+        if music_path:
+            logger.info(f"[Pipeline] Using your custom song: {music_path}")
+        else:
+            session = get_session()
+            existing = session.query(MusicTrack).filter(
+                MusicTrack.project_id == project_id,
+                MusicTrack.is_active == True,
+            ).order_by(MusicTrack.created_at.desc()).first()
+            music_path = existing.output_path if existing else None
+            session.close()
+            if music_path and Path(music_path).exists():
+                logger.info(f"[Pipeline] Reusing existing music track: {music_path}")
+            else:
+                music_path = self.generate_music(project_id)
+
+        self._emit_progress(
+            phase=PipelinePhase.ASSEMBLING, project_id=project_id,
+            message="Muxing song over the LTX Director video…")
+        tmp = str(Path(video_path).with_suffix(".muxtmp.mp4"))
+        subprocess.run(
+            [str(self.config.paths.ffmpeg_bin), "-y",
+             "-i", video_path, "-i", music_path,
+             "-map", "0:v", "-map", "1:a",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-af", "apad", "-shortest", tmp],
+            check=True, capture_output=True)
+        Path(tmp).replace(video_path)
+
+        session = get_session()
+        project = session.query(Project).get(project_id)
+        if project:
+            project.status = ProjectStatus.RENDERED
+            session.commit()
+        session.close()
+        self._emit_progress(
+            phase=PipelinePhase.DONE, project_id=project_id, percent=100.0,
+            message=f"Song video complete: {video_path}")
+
+    def make_urdu_version(self, project_id: str) -> Optional[str]:
+        """Second-language release: when the project has lyrics_urdu, generate
+        a Hindi/Urdu vocal track (same style brief) and mux it over the SAME
+        final video → final_render_urdu.mp4. English final_render.mp4 stays."""
+        import subprocess
+        session = get_session()
+        project = session.query(Project).get(project_id)
+        lyr = (getattr(project, "lyrics_urdu", None) or "").strip() if project else ""
+        video_path = project.output_path if project else None
+        style = (project.music_style or "") if project else ""
+        engine = (getattr(project, "music_model", None) or "auto") if project else "auto"
+        duration = int(project.duration_target) if project else 60
+        session.close()
+        if not lyr:
+            return None
+        if not video_path or not Path(video_path).exists():
+            logger.warning("[Pipeline] Urdu version skipped — no rendered video yet")
+            return None
+
+        project_dir = self.config.paths.projects_dir / project_id
+        urdu_wav = project_dir / "music_urdu.wav"
+        if not urdu_wav.exists():
+            self._emit_progress(
+                phase=PipelinePhase.MUSIC, project_id=project_id,
+                message="Generating Hindi/Urdu song version…")
+            urdu_style = ("female vocal singing in Hindi Urdu language with clear "
+                          "desi pronunciation, " + style) if style else \
+                         "female vocal singing in Hindi Urdu language, cheerful children's nursery rhyme"
+            self.music_gen.generate(
+                style_prompt=urdu_style,
+                duration=duration + 2,
+                lyrics=lyr,
+                output_path=str(urdu_wav),
+                instrumental=False,
+                engine=engine,
+            )
+            self.manager.unload()
+            session = get_session()
+            session.add(MusicTrack(
+                project_id=project_id, style_prompt=urdu_style,
+                output_path=str(urdu_wav), duration=float(duration),
+                is_active=False))
+            session.commit()
+            session.close()
+
+        out = str(Path(video_path).with_name(
+            Path(video_path).stem + "_urdu.mp4"))
+        subprocess.run(
+            [str(self.config.paths.ffmpeg_bin), "-y",
+             "-i", video_path, "-i", str(urdu_wav),
+             "-map", "0:v", "-map", "1:a",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-af", "apad", "-shortest", out],
+            check=True, capture_output=True)
+        logger.info(f"[Pipeline] Urdu version ready: {out}")
+        self._emit_progress(
+            phase=PipelinePhase.DONE, project_id=project_id, percent=100.0,
+            message=f"Urdu/Hindi version ready: {out}")
+        return out
+
+    def generate_ltx_director(self, project_id: str) -> str:
+        """LTX Director multi-segment engine: one continuous long video with
+        NATIVE audio/dialogue from the project's stills + prompts. Runs as an
+        exclusive phase (it is the heaviest job in the app)."""
+        from app.database import get_session, Project, ProjectStatus
+        import subprocess
+        
+        with self._exclusive("ltx-director"):
+            self._progress.project_id = project_id
+            self.ensure_safety(project_id)
+            from app.services.ltx_director import LTXDirectorService
+            self._emit_progress(
+                phase=PipelinePhase.GENERATING, project_id=project_id,
+                message="LTX Director: generating the full 720p video natively (this runs for a long time)...")
+            svc = LTXDirectorService(self.manager, self.config)
+            session = get_session()
+            try:
+                # 1. Native 720p generation
+                raw_out = svc.generate_for_project(project_id)
+                
+                # 2. Upscale to 1080p via FFmpeg Lanczos
+                self._emit_progress(
+                    phase=PipelinePhase.UPSCALING, project_id=project_id,
+                    message="LTX Director: upscaling final video to 1080p...")
+                
+                project_dir = self.config.paths.projects_dir / project_id
+                final_out = str(project_dir / "final_render.mp4")
+                
+                ffmpeg_cmd = [
+                    str(self.config.paths.ffmpeg_bin), "-y",
+                    "-i", raw_out,
+                    "-vf", "scale=1920:1080:flags=lanczos",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                    "-c:a", "copy",
+                    final_out
+                ]
+                subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+                
+                # 3. QA Check
+                self._emit_progress(
+                    phase=PipelinePhase.ASSEMBLING, project_id=project_id,
+                    message="LTX Director: running final QA checks...")
+                    
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.output_path = final_out
+                    project.status = ProjectStatus.RENDERED
+                    session.commit()
+                
+                try:
+                    from app.services import qa as qa_svc
+                    from dataclasses import asdict as _asdict
+                    # Pass expect_audio=False since LTX Director might not have generated an audio stream
+                    final_qa = qa_svc.check_final(
+                        self.config.paths.ffmpeg_bin, final_out,
+                        expected_dur=0.0, expect_audio=False)
+                    self._qa_notes = getattr(self, "_qa_notes", {})
+                    self._qa_notes["final"] = _asdict(final_qa)
+                    qa_svc.write_report(project_dir, self._qa_notes)
+                except Exception as qa_err:
+                    logger.warning(f"[QA] ltx-director final check failed: {qa_err}")
+
+                self._emit_progress(
+                    phase=PipelinePhase.DONE, project_id=project_id,
+                    percent=100.0,
+                    message=f"LTX Director render complete (1080p): {final_out}")
+                return final_out
+            except Exception as e:
+                self._emit_progress(phase=PipelinePhase.ERROR, error=str(e),
+                                    message=f"LTX Director failed: {e}")
+                raise
+            finally:
+                session.close()
+
+    def generate_sfx(self, project_id: str):
+        """Per-clip synced SFX via MMAudio (own VRAM phase). Soft dependency:
+        raises with a clear message when MMAudio isn't installed yet."""
+        from app.services.sfx_gen import SFXService
+        sfx = SFXService(self.manager, self.config)
+        return sfx.generate_for_project(project_id,
+                                        progress_cb=self._emit_progress)
+
     # ── Convenience: Full Auto Pipeline ────────────────────────────────
 
     def run_full_auto(
@@ -2317,6 +3209,17 @@ class PipelineOrchestrator:
         project_id: str,
         narration_path: Optional[str] = None,
     ):
+        # Narration projects have their own phase chain (script→voice→beats→
+        # visuals→sfx→exact render). One routing point here means resume,
+        # auto-resume, /full-auto and /produce all pick the right pipeline.
+        session = get_session()
+        try:
+            p = session.query(Project).get(project_id)
+            ptype = getattr(p, "project_type", "song") if p else "song"
+        finally:
+            session.close()
+        if ptype == "narration":
+            return self.run_full_auto_narration(project_id)
         with self._exclusive("full-auto"):
             self._progress.project_id = project_id  # run_state.json journal target
             return self._run_full_auto_impl(project_id, narration_path)
@@ -2409,6 +3312,29 @@ class PipelineOrchestrator:
             except Exception as lint_err:
                 logger.warning(f"[Pipeline] Script lint failed (continuing): {lint_err}")
 
+            # UNIVERSAL SAFETY GATE — fresh verdict on the just-written script
+            # (every project type), before any GPU generation begins. LLM critic
+            # included: overnight runs must not ship policy-risky videos.
+            self._emit_progress(
+                phase=PipelinePhase.SAFETY, project_id=project_id,
+                message="YT safety gate: reviewing script/lyrics/metadata...")
+            gate = self.safety.run_gate(project_id, use_llm=True)
+            if gate.verdict not in ("pass", "override"):
+                session = get_session()
+                project = session.query(Project).get(project_id)
+                if project:
+                    project.status = ProjectStatus.FAILED
+                    project.error_log = (
+                        f"Safety gate: {gate.verdict} — "
+                        + "; ".join(i.get("detail", "") for i in gate.issues[:5]))
+                    session.commit()
+                session.close()
+                self._emit_progress(
+                    phase=PipelinePhase.ERROR, error="safety",
+                    message=f"Safety gate verdict '{gate.verdict}' — "
+                            f"{len(gate.issues)} issue(s); see safety report.")
+                return
+
             # Auto-approve all scenes
             session = get_session()
             scenes = session.query(Scene).filter(
@@ -2421,6 +3347,23 @@ class PipelineOrchestrator:
             project.status = ProjectStatus.APPROVED
             session.commit()
             session.close()
+
+            # Engine routing: LTX Director replaces the clip/upscale/music/
+            # render phases with ONE multi-director ComfyUI workflow (native
+            # audio + dialogue). Stills are generated first — one reference
+            # image is attached to every segment of every director node.
+            if self._project_video_engine(project_id) == "ltx_director":
+                logger.info("[Pipeline] video_engine=ltx_director → "
+                            "stills batch + one-shot multi-director render")
+                self._ensure_scene_stills(project_id)
+                self.generate_ltx_director(project_id)
+                self._mux_song_over_ltx(project_id)  # song projects only
+                try:
+                    self.make_urdu_version(project_id)
+                except Exception as ur_err:
+                    logger.warning(f"[Pipeline] Urdu version failed: {ur_err}")
+                logger.info(f"[Pipeline] Full auto (LTX Director) complete for {project_id}")
+                return
 
             # Phase 2: Narration — prefer a user-supplied voiceover file, else TTS
             if not narration_path:
@@ -2475,6 +3418,12 @@ class PipelineOrchestrator:
             # Phase 6: Render
             self.render(project_id, narration_path=narration_path, music_path=music_path)
 
+            # Phase 7: Hindi/Urdu second-language version (same video, new song)
+            try:
+                self.make_urdu_version(project_id)
+            except Exception as ur_err:
+                logger.warning(f"[Pipeline] Urdu version failed: {ur_err}")
+
             logger.info(f"[Pipeline] Full auto complete for project {project_id}")
 
         except PipelinePaused:
@@ -2511,4 +3460,11 @@ class PipelinePaused(Exception):
 class PipelineBusy(Exception):
     """Another exclusive phase (generation/upscale/render) is already running.
     The caller should surface this to the user instead of queueing blindly."""
+    pass
+
+
+class SafetyBlocked(Exception):
+    """The universal YT-safety gate did not pass for this project. GPU
+    generation is refused until the script/lyrics are revised (or a human
+    records an override via /safety-override)."""
     pass

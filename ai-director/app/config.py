@@ -185,11 +185,40 @@ class MusicModelConfig(BaseModel):
 
 
 class TTSConfig(BaseModel):
-    """WanGP Omnivoice TTS — communicates via local API."""
-    name: str = "wangp-omnivoice"
-    api_url: str = "http://localhost:5000"  # WanGP local server
+    """Narration TTS.
+    Primary engine: Kokoro-82M (hexgrad/Kokoro-82M, Apache-2.0) — near-instant
+    on GPU, natural prosody, multiple EN voices. English narration routes here.
+    Fallback: Meta MMS-TTS (per-language VITS) for Urdu/Hindi/etc. where
+    Kokoro has no voice.
+    Alignment/QA: faster-whisper word timestamps (no torch-version conflicts)."""
+    engine: str = "kokoro"              # "kokoro" | "mms"
+    kokoro_repo: str = "hexgrad/Kokoro-82M"
+    kokoro_voice: str = "am_michael"    # deep US male — documentary default
+    # Curated voice menu shown in the wizard (Kokoro ships ~50; these are the
+    # consistently best for narration)
+    kokoro_voices: list = [
+        "am_michael",   # US male, deep, documentary
+        "am_fenrir",    # US male, energetic explainer
+        "am_puck",      # US male, warm storyteller
+        "af_heart",     # US female, warm (Kokoro's best overall voice)
+        "af_bella",     # US female, bright
+        "bf_emma",      # UK female
+        "bm_george",    # UK male, classic documentary
+    ]
+    kokoro_speed: float = 1.0
+    kokoro_sample_rate: int = 24000
+    # faster-whisper QA/alignment
+    whisper_model: str = "small"        # word timestamps + WER transcribe-back
+    wer_flag_threshold: float = 0.12    # per-beat WER above this → retry with normalized text
+    # narration master loudness (voice bus; final mix master is -14 LUFS)
+    narration_lufs: float = -16.0
+    # legacy MMS settings
+    name: str = "mms-tts"
     default_voice: str = "warm_female"
-    default_speed: float = 0.9
+    default_speed: float = 0.95
+    # pauses between beats when concatenating the master narration WAV
+    pause_beat: float = 0.35
+    pause_chapter: float = 0.9
 
 
 # ── Generation Defaults ───────────────────────────────────────────────────

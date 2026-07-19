@@ -35,7 +35,8 @@ style:
     - floating lanterns and bubbles
 
 narration:
-  voice: warm_female
+  voice: chatterbox
+  voice_ref: "fairy_voice.wav"  # Reference WAV for Chatterbox voice cloning (placed in assets/voices/)
   pace: slow_gentle     # ~120 words per minute
   style: minimal        # short narration, more ambient visuals
   max_words_per_scene: 15

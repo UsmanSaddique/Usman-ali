@@ -232,6 +232,18 @@ class DirectorService:
         if profile:
             parts.append(f"\n## Channel Profile\n```yaml\n{yaml.dump(profile, default_flow_style=False, allow_unicode=True)}```")
 
+        # Channel-mandated visual direction beats every generic rule above
+        # (e.g. a "minimal story" channel must not get plot-heavy scene plans).
+        visual_direction = (profile or {}).get("visual_direction")
+        if visual_direction:
+            if isinstance(visual_direction, list):
+                visual_direction = "\n".join(f"- {v}" for v in visual_direction)
+            parts.append(
+                f"\n## Visual Direction (CHANNEL MANDATE — overrides any "
+                f"conflicting rule in this prompt, including episode_structure "
+                f"and Retention & Story Engineering)\n{visual_direction}"
+            )
+
         # Load cinematography guide for shot selection training
         cine_path = Path(__file__).parent.parent / "knowledge" / "cinematography_guide.yaml"
         if cine_path.exists():

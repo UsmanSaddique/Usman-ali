@@ -71,6 +71,14 @@ def build_prompts(segments: list, channel_profile: dict, seed_key: str) -> list[
     char_bible = profile.get("character_bible", [])
     art_style = profile.get("art_style_phrase", "soft 3D Pixar-style cartoon render")
     palette = profile.get("color_palette", "bright cheerful pastels")
+    if isinstance(palette, dict):
+        # lane palettes (e.g. {playtime: ..., dreamtime: ...}) — a raw dict
+        # f-stringed into the prompt gets RENDERED AS TEXT by Z-Image.
+        # Use the daytime lane (first value as fallback).
+        palette = palette.get("playtime") or \
+            next(iter(palette.values()), "bright cheerful pastels")
+    elif isinstance(palette, list):
+        palette = ", ".join(str(p) for p in palette)
     neg = profile.get("negative_prompt_additions",
                       "photorealistic, realistic skin, text, watermark, scary, deformed, extra limbs, blurry")
     if isinstance(neg, list):
@@ -97,7 +105,8 @@ def build_prompts(segments: list, channel_profile: dict, seed_key: str) -> list[
             "segment_index": seg.index,
             "prompt": (f"{shot}, {action}, {motion}, {art_style}, {palette}, "
                        f"highly detailed, cinematic, soft volumetric lighting, depth of field, "
-                       f"beautifully rendered, warm rim light, gentle bokeh background"),
+                       f"beautifully rendered, warm rim light, gentle bokeh background, "
+                       f"clean frame without any text, captions, titles or watermarks"),
             "negative_prompt": neg,
             "camera_motion": CAMERA_MOTIONS[seg.index % len(CAMERA_MOTIONS)],
             "narration_text": "" if seg.is_instrumental else seg.text,

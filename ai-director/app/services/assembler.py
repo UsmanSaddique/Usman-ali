@@ -119,6 +119,215 @@ class AssemblerService:
             render_time=elapsed,
         )
 
+    # ── Narration mode: duration-exact assembly + 4-bus mix ───────────
+
+    def assemble_narration(
+        self,
+        blocks: list[dict],       # [{path, duration, offset}] — offset = narration_start
+        output_path: str,
+        narration_path: str,      # the master VO WAV (timeline master)
+        music_path: Optional[str] = None,
+        sfx_tracks: Optional[list[dict]] = None,  # [{path, offset, gain_db}]
+        resolution: str = "1080p",
+        fps: int = 24,
+        music_db: float = -21.0,   # music bed level before ducking
+        sfx_db: float = -12.0,
+        target_lufs: float = -14.0,  # YouTube normalization target
+    ) -> AssemblyResult:
+        """
+        Narration-mode assembly. The VO track is the master clock:
+        1. Every clip is trimmed/padded to EXACTLY its planned duration
+           (freeze-frame pad via tpad when a clip rendered short), so each
+           beat's visual starts precisely at its narration offset — straight
+           cuts, zero cumulative drift by construction.
+        2. Audio is a 4-bus mix: VO / music / SFX — music sidechain-ducks
+           −7dB-ish under the voice, SFX are placed at absolute offsets.
+        3. Master is loudness-normalized to −14 LUFS (YouTube), −1.5 dBTP.
+        """
+        t0 = time.time()
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        res_map = {
+            "1080p": (1920, 1080), "2k": (2560, 1440), "1440p": (2560, 1440),
+            "4k": (3840, 2160), "2160p": (3840, 2160), "720p": (1280, 720),
+        }
+        w, h = res_map.get(resolution, (1920, 1080))
+        if not blocks:
+            raise ValueError("No clips to assemble")
+
+        temp_dir = tempfile.mkdtemp(prefix="aidir_narr_")
+        
+        # Auto-inject transition SFX from local cache at cut points
+        import random
+        sfx_tracks = sfx_tracks or []
+        sfx_lib_dir = self.config.paths.assets_dir / "sfx"
+        if sfx_lib_dir.exists():
+            cut_time = 0.0
+            for i, b in enumerate(blocks[:-1]):
+                dur = float(b["duration"])
+                cut_time += dur
+                # Decide transition type. If next clip is template (diagram/code), use 'pop'.
+                # Otherwise, 70% whoosh, 30% impact.
+                trans_type = "pop" if blocks[i+1].get("is_template") else random.choices(["whoosh", "impact"], weights=[0.7, 0.3])[0]
+                cat_dir = sfx_lib_dir / trans_type
+                if cat_dir.exists():
+                    files = list(cat_dir.glob("*.mp3")) + list(cat_dir.glob("*.wav"))
+                    if files:
+                        sfx_file = random.choice(files)
+                        # offset so the SFX peak hits right at the cut point
+                        offset = max(0, cut_time - 0.5) 
+                        sfx_tracks.append({
+                            "path": str(sfx_file),
+                            "offset": offset,
+                            "gain_db": -12.0
+                        })
+
+        # 1) Normalize every block to exact duration/format
+        norm_paths = []
+        for i, b in enumerate(blocks):
+            dur = float(b["duration"])
+            norm = os.path.join(temp_dir, f"blk_{i:04d}.mp4")
+            cmd = [
+                self.ffmpeg, "-y", "-i", b["path"],
+                "-vf",
+                f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},"
+                f"tpad=stop_mode=clone:stop_duration={dur + 2:.3f}",
+                "-t", f"{dur:.3f}",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-pix_fmt", "yuv420p", "-an",
+                norm,
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if r.returncode != 0:
+                raise RuntimeError(f"Block normalize failed for {b['path']}: "
+                                   f"{r.stderr[-300:]}")
+            norm_paths.append(norm)
+
+        # 2) Straight-cut concat (demuxer, no re-encode)
+        list_path = os.path.join(temp_dir, "concat.txt")
+        with open(list_path, "w") as f:
+            for p in norm_paths:
+                f.write(f"file '{p}'\n")
+        video_path = os.path.join(temp_dir, "video.mp4")
+        subprocess.run([
+            self.ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+            "-c", "copy", video_path,
+        ], capture_output=True, check=True, timeout=600)
+
+        video_dur = self._get_duration(video_path)
+
+        # 3) 4-bus audio mix
+        audio_path = os.path.join(temp_dir, "mix.wav")
+        try:
+            self._mix_narration_audio(
+                narration_path, music_path, sfx_tracks or [],
+                audio_path, video_dur, music_db, sfx_db, target_lufs)
+        except Exception as mix_err:
+            logger.warning(f"[Assembler] 4-bus mix failed ({mix_err}); "
+                           f"falling back to simple VO+music mix")
+            audio_path = self._mix_audio(narration_path, music_path,
+                                         1.0, 0.18, video_dur)
+
+        # 4) Mux
+        self._mux_final(video_path, audio_path, output_path, fps)
+
+        try:
+            import shutil as _sh
+            _sh.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        elapsed = time.time() - t0
+        file_size = os.path.getsize(output_path) / (1024 * 1024)
+        duration = self._get_duration(output_path)
+        logger.info(f"[Assembler] Narration render: {duration:.1f}s, "
+                    f"{file_size:.1f}MB in {elapsed:.1f}s")
+        return AssemblyResult(
+            output_path=output_path, total_duration=duration,
+            resolution=resolution, file_size_mb=file_size, render_time=elapsed)
+
+    def _mix_narration_audio(
+        self,
+        narration_path: str,
+        music_path: Optional[str],
+        sfx_tracks: list[dict],
+        output_path: str,
+        duration: float,
+        music_db: float,
+        sfx_db: float,
+        target_lufs: float,
+    ):
+        """VO / music / SFX buses → sidechain duck → loudnorm master.
+        Music+ambience duck under the voice (sidechaincompress ~-7dB feel,
+        250ms release); SFX are dropped at absolute offsets via adelay."""
+        inputs = ["-i", narration_path]
+        n_in = 1
+        filters = []
+
+        # VO bus (also feeds the sidechain detector)
+        filters.append("[0:a]aresample=48000,pan=stereo|c0=c0|c1=c0[vo];"
+                       "[vo]asplit=2[vomix][vokey]")
+
+        mix_srcs = ["[vomix]"]
+
+        if music_path and os.path.exists(music_path):
+            inputs += ["-stream_loop", "-1", "-i", music_path]
+            music_idx = n_in
+            n_in += 1
+            filters.append(
+                f"[{music_idx}:a]aresample=48000,volume={music_db}dB[musraw];"
+                f"[musraw][vokey]sidechaincompress="
+                f"threshold=0.02:ratio=6:attack=25:release=250:makeup=1[mus]")
+            mix_srcs.append("[mus]")
+        else:
+            # sidechain key must still terminate somewhere
+            filters.append("[vokey]anullsink")
+
+        sfx_labels = []
+        for k, sfx in enumerate(sfx_tracks):
+            if not sfx.get("path") or not os.path.exists(sfx["path"]):
+                continue
+            inputs += ["-i", sfx["path"]]
+            idx = n_in
+            n_in += 1
+            delay_ms = max(0, int(float(sfx.get("offset", 0)) * 1000))
+            gain = float(sfx.get("gain_db", sfx_db))
+            filters.append(
+                f"[{idx}:a]aresample=48000,volume={gain}dB,"
+                f"adelay={delay_ms}|{delay_ms}[sfx{k}]")
+            sfx_labels.append(f"[sfx{k}]")
+        if sfx_labels:
+            filters.append(
+                "".join(sfx_labels) +
+                f"amix=inputs={len(sfx_labels)}:normalize=0:duration=longest[sfxbus]")
+            mix_srcs.append("[sfxbus]")
+
+        filters.append(
+            "".join(mix_srcs) +
+            f"amix=inputs={len(mix_srcs)}:normalize=0:duration=first,"
+            f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11[out]")
+
+        filter_graph = ";".join(filters)
+        graph_file = output_path + ".filter.txt"
+        with open(graph_file, "w", encoding="utf-8") as f:
+            f.write(filter_graph)
+
+        cmd = [
+            self.ffmpeg, "-y", *inputs,
+            "-filter_complex_script", graph_file,
+            "-map", "[out]",
+            "-t", f"{duration:.3f}",
+            "-c:a", "pcm_s16le", "-ar", "48000",
+            output_path,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        try:
+            os.remove(graph_file)
+        except Exception:
+            pass
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg mix failed: {r.stderr[-400:]}")
+
     # ── Internal Steps ─────────────────────────────────────────────────
 
     def _concat_clips(

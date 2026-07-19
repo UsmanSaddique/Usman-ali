@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920">
+  <link rel="stylesheet" href="base.css">
+  <style id="channel-vars"></style>
+  <style>
+    body { display: flex; align-items: center; justify-content: center; }
+
+    .code-container {
+      width: 1600px;
+      padding: 40px;
+    }
+
+    /* ── Terminal chrome ─────────────────────────────────── */
+    .terminal {
+      background: #1a1b26;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 8px 48px rgba(0,0,0,0.5), var(--glow);
+      animation: fadeUp 0.6s ease-out forwards;
+    }
+    .terminal-bar {
+      background: #24283b;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .terminal-dot {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+    }
+    .dot-red    { background: #f7768e; }
+    .dot-yellow { background: #e0af68; }
+    .dot-green  { background: #9ece6a; }
+    .terminal-title {
+      flex: 1;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+
+    .terminal-body {
+      padding: 32px 40px;
+      font-family: var(--mono);
+      font-size: 18px;
+      line-height: 1.7;
+      color: #c0caf5;
+      min-height: 500px;
+    }
+
+    /* ── Syntax colours (tokyonight-inspired) ────────────── */
+    .kw   { color: #bb9af7; }  /* keyword: purple */
+    .fn   { color: #7aa2f7; }  /* function: blue */
+    .str  { color: #9ece6a; }  /* string: green */
+    .num  { color: #ff9e64; }  /* number: orange */
+    .cmt  { color: #565f89; font-style: italic; }  /* comment: grey */
+    .op   { color: #89ddff; }  /* operator: cyan */
+    .type { color: #2ac3de; }  /* type: teal */
+    .var  { color: #c0caf5; }  /* variable: default */
+    .line-num {
+      color: #3b4261;
+      user-select: none;
+      display: inline-block;
+      width: 40px;
+      text-align: right;
+      margin-right: 24px;
+    }
+
+    .code-line {
+      opacity: 0;
+      animation: fadeIn 0.3s ease-out forwards;
+      white-space: pre;
+    }
+    /* stagger: each line appears in sequence */
+    .code-line:nth-child(1)  { animation-delay: 0.3s; }
+    .code-line:nth-child(2)  { animation-delay: 0.5s; }
+    .code-line:nth-child(3)  { animation-delay: 0.7s; }
+    .code-line:nth-child(4)  { animation-delay: 0.9s; }
+    .code-line:nth-child(5)  { animation-delay: 1.1s; }
+    .code-line:nth-child(6)  { animation-delay: 1.3s; }
+    .code-line:nth-child(7)  { animation-delay: 1.5s; }
+    .code-line:nth-child(8)  { animation-delay: 1.7s; }
+    .code-line:nth-child(9)  { animation-delay: 1.9s; }
+    .code-line:nth-child(10) { animation-delay: 2.1s; }
+    .code-line:nth-child(11) { animation-delay: 2.3s; }
+    .code-line:nth-child(12) { animation-delay: 2.5s; }
+    .code-line:nth-child(13) { animation-delay: 2.7s; }
+    .code-line:nth-child(14) { animation-delay: 2.9s; }
+    .code-line:nth-child(15) { animation-delay: 3.1s; }
+
+    /* highlight active line */
+    .code-line.active {
+      background: rgba(122,162,247,0.08);
+      border-left: 3px solid var(--accent);
+      margin-left: -3px;
+      padding-left: 3px;
+    }
+
+    /* ── Bottom label ────────────────────────────────────── */
+    .file-label {
+      margin-top: 24px;
+      font-size: 18px;
+      color: var(--text-dim);
+      font-family: var(--mono);
+      text-align: right;
+      animation: fadeIn 0.6s ease-out 2s forwards;
+      opacity: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="code-container">
+    <div class="terminal">
+      <div class="terminal-bar">
+        <div class="terminal-dot dot-red"></div>
+        <div class="terminal-dot dot-yellow"></div>
+        <div class="terminal-dot dot-green"></div>
+        <div class="terminal-title" id="filename"></div>
+      </div>
+      <div class="terminal-body" id="code-body"></div>
+    </div>
+    <div class="file-label" id="file-label"></div>
+  </div>
+
+  <script>
+    // Data: { filename, label, lines: [{num, html, active}] }
+    // html: pre-tokenized with <span class="kw/fn/str/...">
+    function render(data) {
+      document.getElementById('filename').textContent = data.filename || '';
+      document.getElementById('file-label').textContent = data.label || '';
+      const body = document.getElementById('code-body');
+      (data.lines || []).forEach((ln, i) => {
+        const div = document.createElement('div');
+        div.className = 'code-line' + (ln.active ? ' active' : '');
+        div.style.animationDelay = `${0.3 + i * 0.2}s`;
+        div.innerHTML =
+          `<span class="line-num">${ln.num || i + 1}</span>${ln.html || ''}`;
+        body.appendChild(div);
+      });
+    }
+    if (window.__DATA__) render(window.__DATA__);
+  </script>
+</body>
+</html>
