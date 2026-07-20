@@ -1,6 +1,6 @@
 # AI Director — C# / .NET Port Master Plan
 
-Convert the Python FastAPI pipeline (`app/`) to a .NET 8 solution using Clean
+Convert the Python FastAPI pipeline (`app/`) to a .NET 10 solution using Clean
 Architecture, producing byte-identical outputs against the same ComfyUI server,
 the same workflow JSONs, and the same ffmpeg commands.
 
@@ -100,7 +100,8 @@ external goes through the `Abstractions/` interfaces.
 
 ### Key technology choices
 
-- **.NET 8 LTS**, minimal APIs (closest shape to FastAPI decorators).
+- **.NET 10 LTS** (current LTS, released Nov 2025, supported to Nov 2028),
+  minimal APIs (closest shape to FastAPI decorators).
 - **EF Core + SQLite** with WAL on; reuse the *same schema and column names*
   so `ai_director.db` keeps working — write an EF model that maps the existing
   tables rather than regenerating them. Port `_migrate()` as idempotent
