@@ -31,6 +31,7 @@ public static class DependencyInjection
 
         services.AddHttpClient<IComfyUiClient, ComfyUiClient>();
         services.AddSingleton<IWorkflowBuilder, WorkflowBuilder>();
+        services.AddScoped<ILtxDirectorEngine, LtxDirectorEngine>();
         services.AddSingleton<IMediaRunner, MediaRunner>();
         services.AddScoped<IProjectRepository, ProjectRepository>();
 

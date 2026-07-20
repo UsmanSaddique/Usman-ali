@@ -601,13 +601,24 @@ class PipelineOrchestrator:
                     narration_text="",   # the song carries the audio
                     # keep the lyric line off narration (no TTS) but on record —
                     # the render uses it to write the final .srt subtitle file
-                    director_notes={"lyric_text": p["narration_text"]},
+                    director_notes={
+                        "lyric_text": p["narration_text"],
+                        "director_guidance": p.get("director_guidance", {}),
+                    },
                     status=SceneStatus.PENDING,
                 ))
             project.total_scenes = len(prompts)
             project.completed_scenes = 0
             project.status = ProjectStatus.SCRIPTED
             session.commit()
+            # persist the master-director storyboard next to the renders
+            try:
+                from app.services import master_director
+                master_director.save_plan(
+                    self.config.paths.projects_dir / project_id,
+                    [p.get("director_guidance", {}) for p in prompts])
+            except Exception as g_err:
+                logger.warning(f"[Pipeline] director guidance save failed: {g_err}")
             logger.info(f"[Pipeline] {len(prompts)} scenes built from lyrics for {project_id}")
             return len(prompts)
         finally:
@@ -2522,6 +2533,35 @@ class PipelineOrchestrator:
                                        result.total_duration)
             except Exception as srt_err:
                 logger.warning(f"[Release] lyrics .srt failed (non-fatal): {srt_err}")
+
+            # CocoMelon-style karaoke captions: each lyric line on screen with
+            # a word-by-word color fill as it is sung (whisper word timings),
+            # burned into final_render.mp4; the caption-less master is kept as
+            # final_render_nocaptions.mp4. Best-effort, never fails the render.
+            try:
+                if music_path and (project.lyrics or "").strip():
+                    from app.services import karaoke, lyric_sync
+                    self._emit_progress(
+                        phase=PipelinePhase.ASSEMBLING, project_id=project_id,
+                        message="Karaoke captions: syncing lyrics to the vocals...")
+                    kcues = lyric_cues
+                    if not any(text for _, text in kcues):
+                        kcues = self._cues_from_lyrics(
+                            project.lyrics, [d for d, _ in lyric_cues])
+                    profile = self.director.load_channel_profile(
+                        project.channel.slug) or {}
+                    karaoke.add_to_render(
+                        self.config.paths.ffmpeg_bin, result.output_path,
+                        music_path, kcues,
+                        self.config.generation.transition_duration,
+                        result.total_duration,
+                        language=lyric_sync.whisper_language(
+                            profile.get("language", "")))
+                    # plain lyrics next to the render, for CapCut-style edits
+                    (project_dir / "lyrics.txt").write_text(
+                        project.lyrics, encoding="utf-8")
+            except Exception as k_err:
+                logger.warning(f"[Release] karaoke captions failed (non-fatal): {k_err}")
 
             # Upload-ready assets: metadata.json + auto-picked thumbnail.jpg
             self._write_release_assets(

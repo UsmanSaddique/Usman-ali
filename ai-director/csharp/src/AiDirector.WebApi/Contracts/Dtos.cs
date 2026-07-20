@@ -13,12 +13,24 @@ public sealed record ProjectSummary(
 }
 
 public sealed record SceneDto(
-    int SceneNumber, string SceneType, string Prompt, double Duration,
-    string Status, string? OutputPath)
+    string Id, int SceneNumber, string SceneType, string Prompt, double Duration,
+    string Status, string? OutputPath, string? ClipPath, string? ClipUrl,
+    int Versions, int? ActiveVersion, bool Upscaled)
 {
-    public static SceneDto From(Scene s) => new(
-        s.SceneNumber, s.SceneType.ToString().ToLowerInvariant(), s.Prompt, s.Duration,
-        s.Status.ToString().ToLowerInvariant(), s.ActiveGeneration?.OutputPath);
+    // Mirrors the Python scene dict (main.py project detail): the frontend keys
+    // per-scene actions off `id`, shows the HD badge off `upscaled`, and plays
+    // `clip_url` — which must point at the upscaled clip when one exists.
+    public static SceneDto From(Scene s)
+    {
+        var gen = s.ActiveGeneration ?? s.Generations.OrderByDescending(g => g.Version).FirstOrDefault();
+        var upscaled = gen?.UpscaledPath is { Length: > 0 } up && up != gen.OutputPath;
+        var clipPath = upscaled ? gen!.UpscaledPath : gen?.OutputPath;
+        return new(
+            s.Id, s.SceneNumber, s.SceneType.ToString().ToLowerInvariant(), s.Prompt, s.Duration,
+            s.Status.ToString().ToLowerInvariant(), gen?.OutputPath, clipPath,
+            clipPath is null ? null : $"/projects/{s.ProjectId}/clips/scene_{s.SceneNumber:D3}_v{gen?.Version ?? 1}.mp4",
+            s.Generations.Count, gen?.Version, upscaled);
+    }
 }
 
 public sealed record MusicVariant(string Id, string Url, string? Style, bool Active);

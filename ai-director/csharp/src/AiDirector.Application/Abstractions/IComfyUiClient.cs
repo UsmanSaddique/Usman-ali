@@ -28,4 +28,8 @@ public interface IComfyUiClient
 
     /// POST /free — unload models / free VRAM (best effort).
     Task<bool> FreeVramAsync(CancellationToken ct = default);
+
+    /// GET /object_info — node class metadata (widget input ordering for the
+    /// UI-graph → API-prompt conversion).
+    Task<JsonObject> GetObjectInfoAsync(CancellationToken ct = default);
 }

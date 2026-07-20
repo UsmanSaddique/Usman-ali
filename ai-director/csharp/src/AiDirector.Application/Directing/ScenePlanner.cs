@@ -22,6 +22,13 @@ public static class ScenePlanner
                 ? $"{channelStyleCue}, instrumental interlude, gentle ambient motion"
                 : $"{channelStyleCue}, visual for the lyric: \"{lyricText}\", cinematic, expressive";
 
+            // Master-director pass: shot/camera/lighting/mood/composition follow
+            // a dramatic arc over the video; baked into the prompt and saved in
+            // director_notes so resume and the LTX Director engine reuse it.
+            var guidance = MasterDirector.GuidanceFor(
+                seg.Index, segments.Count, seg.SectionType, project.Id);
+            prompt = MasterDirector.ApplyCue(prompt, guidance);
+
             scenes.Add(new Scene
             {
                 ProjectId = project.Id,
@@ -38,6 +45,7 @@ public static class ScenePlanner
                     ["section"] = seg.SectionType,
                     ["start_sec"] = seg.StartSec,
                     ["end_sec"] = seg.EndSec,
+                    ["director_guidance"] = guidance.ToNotes(),
                 },
             });
         }

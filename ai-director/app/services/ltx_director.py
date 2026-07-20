@@ -579,16 +579,19 @@ class LTXDirectorService:
         return client.collect_output(history, output_path)
 
     def _generate_chunked(self, segments: list[dict], project_dir,
-                          out_path: str, chunk_size: int = 10,
+                          out_path: str, chunk_size: int = 6,
                           extra_loras: Optional[list] = None) -> str:
-        """Long videos: run the 2-director workflow once per chunk of up to
-        `chunk_size` segments (5 per director — the proven recipe), then
-        concat the parts. Resumable: finished part files are skipped."""
+        """Multi-director videos: run ONE director node per chunk (up to 6
+        segments — the single-director workflow), save that director's part
+        file to disk immediately, then concat the parts. Resumable at
+        DIRECTOR granularity: after a crash/power cut only the director that
+        was mid-render is redone; every finished part is skipped."""
+        import os
         chunks = [segments[i:i + chunk_size]
                   for i in range(0, len(segments), chunk_size)]
         if len(chunks) > 1 and len(chunks[-1]) == 1:
             # a lone trailing segment renders poorly — fold it into the
-            # previous chunk (11 segments still fits 6+5)
+            # previous chunk (7 segments splits 4+3 across the two directors)
             chunks[-2].extend(chunks.pop())
 
         parts_dir = Path(project_dir) / "ltx_parts"
@@ -597,13 +600,20 @@ class LTXDirectorService:
         for i, chunk in enumerate(chunks):
             part = parts_dir / f"part_{i:02d}.mp4"
             if part.exists() and part.stat().st_size > 100_000:
-                logger.info(f"[LTXDirector] part {i + 1}/{len(chunks)} "
+                logger.info(f"[LTXDirector] director {i + 1}/{len(chunks)} "
                             f"already rendered — resuming past it")
             else:
                 secs = sum(float(s["seconds"]) for s in chunk)
-                logger.info(f"[LTXDirector] chunk {i + 1}/{len(chunks)}: "
+                logger.info(f"[LTXDirector] director {i + 1}/{len(chunks)}: "
                             f"{len(chunk)} segments ({secs:.0f}s)")
-                self.generate(chunk, str(part), extra_loras=extra_loras)
+                # render to a temp name and swap in atomically: a power cut
+                # mid-copy must never leave a corrupt part_XX.mp4 behind that
+                # a later resume would silently trust
+                tmp = parts_dir / f"part_{i:02d}.tmp.mp4"
+                if tmp.exists():
+                    tmp.unlink()
+                self.generate(chunk, str(tmp), extra_loras=extra_loras)
+                os.replace(tmp, part)
             part_files.append(part)
 
         lst = parts_dir / "concat.txt"
@@ -630,8 +640,10 @@ class LTXDirectorService:
             ).order_by(Scene.scene_number).all()
 
             images_dir = self.config.paths.projects_dir / project_id / "images"
+            from app.services import master_director
+            guidance_plan = []
             segments = []
-            for s in scenes:
+            for idx, s in enumerate(scenes):
                 # reference still, in priority order: user-pinned still →
                 # generation output/thumbnail → batch-phase still file
                 notes = s.director_notes or {}
@@ -661,12 +673,30 @@ class LTXDirectorService:
                 if s.narration_text and \
                         getattr(project, "project_type", "song") != "song":
                     dialogue = f'The narrator says: "{s.narration_text.strip()}"'
+                # Master-director guidance: reuse the guidance saved at scene
+                # planning; older scenes without one get it here (and it is
+                # saved back so resume sees the identical storyboard).
+                guidance = notes.get("director_guidance")
+                if not guidance:
+                    guidance = master_director.guidance_for(
+                        idx, len(scenes), str(notes.get("section") or "verse"),
+                        project_id)
+                    new_notes = dict(notes)
+                    new_notes["director_guidance"] = guidance
+                    s.director_notes = new_notes
+                guidance_plan.append(guidance)
                 segments.append({
-                    "prompt": s.prompt,
+                    "prompt": master_director.apply_cue(s.prompt, guidance),
                     "dialogue": dialogue,
                     "image_path": img,
                     "seconds": float(s.duration or 5.0),
                 })
+            session.commit()   # persist any newly assigned guidance
+            try:
+                master_director.save_plan(
+                    self.config.paths.projects_dir / project_id, guidance_plan)
+            except Exception as g_err:
+                logger.warning(f"[LTXDirector] guidance save failed: {g_err}")
             if len(segments) < 2:
                 raise ValueError(
                     "LTX Director needs at least 2 scenes with a still image "
@@ -682,9 +712,15 @@ class LTXDirectorService:
 
             project_dir = self.config.paths.projects_dir / project_id
             out = str(project_dir / "ltx_director_render.mp4")
-            if len(segments) <= 12:
+            if len(segments) <= 6:
+                # single director — one workflow, nothing to checkpoint between
                 result = self.generate(segments, out, extra_loras=proj_loras)
             else:
+                # MULTI-DIRECTOR: one director node per chunk, each saved to
+                # disk as ltx_parts/part_XX.mp4 the moment it finishes. A crash
+                # or power cut only costs the director that was mid-render —
+                # resume skips every finished part instead of restarting from
+                # director 1.
                 result = self._generate_chunked(segments, project_dir, out,
                                                 extra_loras=proj_loras)
             project.output_path = result

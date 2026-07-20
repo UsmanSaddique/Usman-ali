@@ -175,6 +175,14 @@ public sealed class ComfyUiClient(
         catch { return false; }
     }
 
+    public async Task<JsonObject> GetObjectInfoAsync(CancellationToken ct = default)
+    {
+        var resp = await http.GetAsync($"{Base}/object_info", ct);
+        resp.EnsureSuccessStatusCode();
+        var data = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct))?.AsObject();
+        return data ?? throw new InvalidOperationException("ComfyUI /object_info returned no data");
+    }
+
     private async Task<JsonObject?> GetQueueAsync(CancellationToken ct)
     {
         try

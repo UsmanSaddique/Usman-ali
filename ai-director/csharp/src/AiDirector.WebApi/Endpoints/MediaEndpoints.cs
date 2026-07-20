@@ -35,7 +35,9 @@ public static partial class MediaEndpoints
 
             var gen = scene.Generations.FirstOrDefault(g => g.Id == scene.ActiveGenerationId)
                       ?? scene.Generations.OrderByDescending(g => g.Version).FirstOrDefault();
-            var path = Resolve(gen?.OutputPath);
+            // Prefer the HD clip once the scene has been upscaled (parity with
+            // Python's clip_path = upscaled_path or output_path).
+            var path = Resolve(gen?.UpscaledPath) ?? Resolve(gen?.OutputPath);
             return path is null ? Results.NotFound() : ServeFile(path, "video/mp4");
         });
 

@@ -17,6 +17,20 @@ public sealed class AiDirectorOptions
     public ImageOptions Image { get; set; } = new();
     public UpscaleOptions Upscale { get; set; } = new();
     public GenerationOptions Generation { get; set; } = new();
+    public LtxDirectorOptions LtxDirector { get; set; } = new();
+}
+
+/// The "ltx_director" multi-director engine (app/services/ltx_director.py).
+public sealed class LtxDirectorOptions
+{
+    /// UI-format workflow template shared with the Python app.
+    public string TemplatePath { get; set; } =
+        System.IO.Path.Combine("app", "knowledge", "workflows", "ltx_director_multi.json");
+    /// Segments per director node — one director per resumable part file.
+    public int ChunkSize { get; set; } = 6;
+    /// One director render can legitimately take hours.
+    public int TimeoutSec { get; set; } = 14400;
+    public int Fps { get; set; } = 24;
 }
 
 public sealed class PathsOptions

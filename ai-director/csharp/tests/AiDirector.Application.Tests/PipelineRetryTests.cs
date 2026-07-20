@@ -20,6 +20,7 @@ public sealed class PipelineRetryTests
     private readonly IProjectRepository _repo = Substitute.For<IProjectRepository>();
     private readonly IComfyUiClient _comfy = Substitute.For<IComfyUiClient>();
     private readonly IWorkflowBuilder _workflows = Substitute.For<IWorkflowBuilder>();
+    private readonly ILtxDirectorEngine _ltx = Substitute.For<ILtxDirectorEngine>();
     private readonly IProgressNotifier _notifier = Substitute.For<IProgressNotifier>();
     private readonly Project _project;
 
@@ -55,7 +56,7 @@ public sealed class PipelineRetryTests
     }
 
     private PipelineOrchestrator Orchestrator() => new(
-        _repo, _comfy, _workflows, _notifier,
+        _repo, _comfy, _workflows, _ltx, _notifier,
         Options.Create(new AiDirectorOptions()),
         NullLogger<PipelineOrchestrator>.Instance);
 

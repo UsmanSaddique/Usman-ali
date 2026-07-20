@@ -29,12 +29,17 @@ $pubDir    = Join-Path $env:TEMP 'ai-director-csharp-pub'
 
 if (-not $NoPublish) {
     Write-Host "Publishing to $pubDir ..." -ForegroundColor Cyan
-    dotnet publish (Join-Path $csharpDir 'src/AiDirector.WebApi') -c Release -o $pubDir --nologo -v q
+    # SINGLE-FILE on purpose: SAC blocks freshly built project DLLs (new hash,
+    # no reputation) from ANY path, but allows the bundled exe - it only
+    # evaluates the host executable, and the project assemblies load from
+    # inside the bundle instead of from disk.
+    dotnet publish (Join-Path $csharpDir 'src/AiDirector.WebApi') -c Release -r win-x64 `
+        --self-contained false -p:PublishSingleFile=true -o $pubDir --nologo -v q
     if ($LASTEXITCODE -ne 0) { throw "publish failed ($LASTEXITCODE)" }
 }
 
-$dll = Join-Path $pubDir 'AiDirector.WebApi.dll'
-if (-not (Test-Path $dll)) { throw "$dll not found. Run without -NoPublish first." }
+$exe = Join-Path $pubDir 'AiDirector.WebApi.exe'
+if (-not (Test-Path $exe)) { throw "$exe not found. Run without -NoPublish first." }
 
 # Absolute paths so the app finds the real DB/assets from the published location.
 $env:AiDirector__Paths__Database    = Join-Path $repoRoot 'ai_director.db'
@@ -54,4 +59,4 @@ $contentRoot = Join-Path $csharpDir 'src/AiDirector.WebApi'
 Write-Host "DB       : $($env:AiDirector__Paths__Database)"
 Write-Host "Listening: http://localhost:$Port  (frontend / , swagger /swagger)" -ForegroundColor Green
 
-& dotnet $dll --urls "http://localhost:$Port" --contentRoot $contentRoot
+& $exe --urls "http://localhost:$Port" --contentRoot $contentRoot

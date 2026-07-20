@@ -189,7 +189,9 @@ public static class ProductionEndpoints
 
         // Assemble the final video from generated clips + music.
         g.MapPost("/{id}/render",
-            async (string id, AiDirectorDbContext db, Assembler assembler, CancellationToken ct) =>
+            async (string id, RenderRequest? req, AiDirectorDbContext db, Assembler assembler,
+                   Microsoft.Extensions.Options.IOptions<AiDirector.Application.Configuration.AiDirectorOptions> opts,
+                   CancellationToken ct) =>
         {
             var project = await db.Projects
                 .Include(p => p.Scenes).ThenInclude(s => s.Generations)
@@ -197,24 +199,127 @@ public static class ProductionEndpoints
                 .FirstOrDefaultAsync(p => p.Id == id, ct);
             if (project is null) return Results.NotFound();
 
+            // Prefer the ESRGAN-upscaled clip when one exists; scene.Duration is
+            // the real clip length (5.04s) — the old hardcoded 5.0 drifted the
+            // crossfade offsets by ~2s over a 48-scene video.
             var clips = project.Scenes.OrderBy(s => s.SceneNumber)
-                .Select(s => s.ActiveGeneration?.OutputPath ?? s.Generations.LastOrDefault()?.OutputPath)
-                .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
-                .Select(p => new Assembler.Clip(p!, 5.0))
+                .Select(s =>
+                {
+                    var gen = s.ActiveGeneration ?? s.Generations.LastOrDefault();
+                    var path = (gen?.UpscaledPath is { } up && File.Exists(up)) ? up : gen?.OutputPath;
+                    return (Path: path, s.Duration);
+                })
+                .Where(c => !string.IsNullOrEmpty(c.Path) && File.Exists(c.Path))
+                .Select(c => new Assembler.Clip(c.Path!, c.Duration))
                 .ToList();
             if (clips.Count == 0)
                 return Results.BadRequest(new { error = "no rendered clips to assemble" });
 
-            var music = project.MusicTracks.FirstOrDefault(t => t.IsActive)?.OutputPath;
-            var outPath = Path.Combine("assets_generated", id, "final.mp4");
+            // Explicit track wins; else the active one. A song video's music is
+            // the master audio (volume 1.0), not background under narration.
+            var track = req?.TrackId is { } tid
+                ? project.MusicTracks.FirstOrDefault(t => t.Id == tid)
+                : project.MusicTracks.FirstOrDefault(t => t.IsActive);
+            if (req?.TrackId is not null && track is null)
+                return Results.BadRequest(new { error = $"unknown track_id {req.TrackId}" });
+            var musicVolume = req?.MusicVolume ?? 1.0;
+
+            var outName = string.IsNullOrWhiteSpace(req?.OutputName) ? "final.mp4" : req!.OutputName!;
+            if (!outName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)) outName += ".mp4";
+            var outPath = Path.Combine(opts.Value.Paths.AssetsDir, id, outName);
 
             project.Status = ProjectStatus.Assembling;
             await db.SaveChangesAsync(ct);
-            var result = await assembler.AssembleAsync(clips, outPath, musicPath: music, ct: ct);
+            var result = await assembler.AssembleAsync(clips, outPath,
+                musicPath: track?.OutputPath, musicVolume: musicVolume,
+                resolution: req?.Resolution ?? opts.Value.Upscale.Target, ct: ct);
             project.OutputPath = result.OutputPath;
             project.Status = ProjectStatus.Rendered;
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { output_path = result.OutputPath, duration = result.TotalDuration, size_mb = result.FileSizeMb });
+        });
+
+        // Real-ESRGAN upscale of every finished clip via ComfyUI (port of
+        // main.py /start-upscale). Resumable: clips whose generation already has
+        // an UpscaledPath on disk are skipped, so re-POSTing after a crash
+        // continues where it left off. Runs detached — poll the project status.
+        g.MapPost("/{id}/start-upscale",
+            async (string id, AiDirectorDbContext db, IServiceScopeFactory scopes,
+                   ILoggerFactory logs, CancellationToken ct) =>
+        {
+            var exists = await db.Projects.AnyAsync(p => p.Id == id, ct);
+            if (!exists) return Results.NotFound();
+            var logger = logs.CreateLogger("Upscale");
+
+            _ = Task.Run(async () =>
+            {
+                using var scope = scopes.CreateScope();
+                var sdb = scope.ServiceProvider.GetRequiredService<AiDirectorDbContext>();
+                var comfy = scope.ServiceProvider.GetRequiredService<AiDirector.Application.Abstractions.IComfyUiClient>();
+                var workflows = scope.ServiceProvider.GetRequiredService<AiDirector.Application.Abstractions.IWorkflowBuilder>();
+                var o = scope.ServiceProvider
+                    .GetRequiredService<Microsoft.Extensions.Options.IOptions<AiDirector.Application.Configuration.AiDirectorOptions>>().Value;
+
+                var project = await sdb.Projects
+                    .Include(p => p.Scenes).ThenInclude(s => s.Generations)
+                    .FirstAsync(p => p.Id == id);
+                var prior = project.Status;
+                project.Status = ProjectStatus.Upscaling;
+                await sdb.SaveChangesAsync();
+
+                var done = 0; var failed = 0;
+                try
+                {
+                    if (!await comfy.WaitReadyAsync(o.ComfyUi.ColdStartTimeoutSec, o.ComfyUi.AutoLaunch))
+                        throw new InvalidOperationException("ComfyUI not ready for upscaling");
+
+                    var model = o.Upscale.UseAnimeModel ? o.Upscale.AnimeModelName : o.Upscale.ModelName;
+                    foreach (var scene in project.Scenes.OrderBy(s => s.SceneNumber))
+                    {
+                        var gen = scene.ActiveGeneration ?? scene.Generations.LastOrDefault();
+                        if (gen?.OutputPath is null || !File.Exists(gen.OutputPath)) continue;
+                        if (gen.UpscaledPath is { } up && File.Exists(up)) { done++; continue; }
+
+                        try
+                        {
+                            // VHS_LoadVideo reads from ComfyUI/input.
+                            var inputName = $"aidir_up_{scene.Id[..8]}.mp4";
+                            File.Copy(gen.OutputPath, Path.Combine(o.Paths.ComfyInput, inputName), overwrite: true);
+
+                            var prefix = $"aidir_{scene.Id[..8]}_hd";
+                            var wf = workflows.EsrganVideoUpscale(inputName, 1920, 1080,
+                                o.Video.DefaultFps, model, prefix);
+                            var promptId = await comfy.SubmitAsync(wf);
+                            var hist = await comfy.WaitForCompletionAsync(promptId);
+
+                            var dest = Path.Combine(o.Paths.AssetsDir, id, "upscaled",
+                                $"scene_{scene.SceneNumber:D3}_hd.mp4");
+                            await comfy.CollectOutputAsync(hist, dest);
+                            gen.UpscaledPath = dest;
+                            await sdb.SaveChangesAsync();
+                            done++;
+                            logger.LogInformation("[Upscale] {N}: scene {Scene} -> {Dest}", done, scene.SceneNumber, dest);
+                        }
+                        catch (Exception ex)
+                        {
+                            failed++;
+                            logger.LogError(ex, "[Upscale] scene {Scene} failed", scene.SceneNumber);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "[Upscale] batch failed for {Id}", id);
+                }
+                finally
+                {
+                    project.Status = prior == ProjectStatus.Rendered ? ProjectStatus.Rendered : ProjectStatus.Generated;
+                    await sdb.SaveChangesAsync();
+                    logger.LogInformation("[Upscale] {Id} finished: {Done} upscaled, {Failed} failed", id, done, failed);
+                }
+            }, CancellationToken.None);
+
+            return Results.Accepted($"/api/projects/{id}", new { status = "upscaling" });
         });
 
         // Create scenes explicitly (ports main.py /scenes-manual). Full control
@@ -297,6 +402,12 @@ public sealed record UpdateSceneRequest(string? Prompt, string? NegativePrompt, 
 
 public sealed record ManualScene(string Prompt, string? NegativePrompt, double? Duration, string? CameraMotion);
 public sealed record ManualScenesRequest(List<ManualScene> Scenes);
+
+/// Optional render controls. TrackId picks the soundtrack without flipping
+/// is_active (lets one project render an English and an Urdu version side by
+/// side); OutputName keeps those renders from overwriting each other.
+public sealed record RenderRequest(
+    string? TrackId, string? OutputName, double? MusicVolume, string? Resolution);
 
 public sealed record MusicVariantsRequest(
     int? Count, string? Engine, string? Style, string? Lyrics, bool? Vocals, bool? Resume,

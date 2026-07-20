@@ -7,6 +7,8 @@ template system so wizard "From Lyrics" scenes match the channel look.
 import random
 import hashlib
 
+from app.services import master_director
+
 TEMPLATE_ACTIONS = {
     "intro": [
         "golden sunrise breaking over a peaceful {setting}, warm volumetric light rays, floating dust motes",
@@ -98,18 +100,27 @@ def build_prompts(segments: list, channel_profile: dict, seed_key: str) -> list[
         setting = rng.choice(SETTINGS)
 
         action = template.format(character=char_desc, setting=setting)
-        shot = SHOT_TYPES[seg.index % len(SHOT_TYPES)]
         motion = MOTION_CUES[seg.index % len(MOTION_CUES)]
+
+        # Master-director pass: shot/camera/lighting/mood/composition follow a
+        # dramatic arc across the whole video; saved with the scene so both
+        # video engines (and the C# port) use the exact same storyboard.
+        guidance = master_director.guidance_for(
+            seg.index, len(segments), seg.section_type, seed_key)
+        shot = guidance["shot"]
 
         prompts.append({
             "segment_index": seg.index,
             "prompt": (f"{shot}, {action}, {motion}, {art_style}, {palette}, "
                        f"highly detailed, cinematic, soft volumetric lighting, depth of field, "
                        f"beautifully rendered, warm rim light, gentle bokeh background, "
-                       f"clean frame without any text, captions, titles or watermarks"),
+                       f"clean frame without any text, captions, titles or watermarks, "
+                       f"camera: {guidance['camera']}, {guidance['lighting']}, "
+                       f"{guidance['mood']} mood, {guidance['composition']}"),
             "negative_prompt": neg,
             "camera_motion": CAMERA_MOTIONS[seg.index % len(CAMERA_MOTIONS)],
             "narration_text": "" if seg.is_instrumental else seg.text,
             "duration": seg.duration,
+            "director_guidance": guidance,
         })
     return prompts

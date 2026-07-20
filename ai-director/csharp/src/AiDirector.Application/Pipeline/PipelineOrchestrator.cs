@@ -1,5 +1,9 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using AiDirector.Application.Abstractions;
 using AiDirector.Application.Configuration;
+using AiDirector.Application.Directing;
 using AiDirector.Domain.Entities;
 using AiDirector.Domain.Enums;
 using Microsoft.Extensions.Logging;
@@ -11,10 +15,13 @@ namespace AiDirector.Application.Pipeline;
 /// pending scene it generates a still (Z-Image) then animates it (LTX i2v),
 /// records a Generation, and advances scene/project status — emitting progress
 /// over IProgressNotifier the whole time. External heavy work stays in ComfyUI.
+/// Projects with VideoEngine == "ltx_director" instead route to the
+/// multi-director engine (stills → resumable director parts → concat).
 public sealed class PipelineOrchestrator(
     IProjectRepository projects,
     IComfyUiClient comfy,
     IWorkflowBuilder workflows,
+    ILtxDirectorEngine ltxDirector,
     IProgressNotifier progress,
     IOptions<AiDirectorOptions> options,
     ILogger<PipelineOrchestrator> log)
@@ -35,6 +42,26 @@ public sealed class PipelineOrchestrator(
 
         project.Status = ProjectStatus.Generating;
         await projects.SaveAsync(ct);
+
+        if (project.VideoEngine == "ltx_director")
+        {
+            // Routing parity with pipeline.py: ltx_director projects render as
+            // one long multi-director video instead of clip-by-clip.
+            try
+            {
+                await RunLtxDirectorAsync(project, ct);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                await Fail(project, $"LTX Director failed: {e.Message}");
+            }
+            catch (Exception)
+            {
+                await RollbackToCheckpointAsync(project);
+                throw;
+            }
+            return;
+        }
 
         // Generating is included deliberately: the GPU queue is single-tenant and
         // this run has just started, so any scene still marked Generating is a
@@ -198,6 +225,127 @@ public sealed class PipelineOrchestrator(
         scene.ActiveGenerationId = gen.Id;
         scene.Status = SceneStatus.Generated;
         await projects.SaveAsync(ct);
+    }
+
+    /// LTX Director engine (port of pipeline.generate_ltx_director +
+    /// ltx_director.generate_for_project): ensure a reference still per scene
+    /// (resumable — existing stills are reused), apply master-director
+    /// guidance, then render via ILtxDirectorEngine. The engine itself is
+    /// resumable at DIRECTOR granularity: finished ltx_parts/part_XX.mp4
+    /// files are skipped after a crash or power outage.
+    private async Task RunLtxDirectorAsync(Project project, CancellationToken ct)
+    {
+        var scenes = project.Scenes.OrderBy(s => s.SceneNumber).ToList();
+        var imagesDir = Path.Combine(_o.Paths.ProjectsDir, project.Id, "images");
+        Directory.CreateDirectory(imagesDir);
+
+        var segments = new List<LtxSegment>();
+        var guidancePlan = new List<Dictionary<string, object?>>();
+        for (var idx = 0; idx < scenes.Count; idx++)
+        {
+            var scene = scenes[idx];
+            ct.ThrowIfCancellationRequested();
+
+            // Master-director guidance: deterministic on (project, index, section),
+            // so recomputing here matches what scene planning saved — and scenes
+            // created before the guidance feature get theirs assigned now.
+            var section = scene.DirectorNotes.TryGetValue("section", out var sec)
+                ? sec?.ToString() : null;
+            var guidance = MasterDirector.GuidanceFor(idx, scenes.Count, section, project.Id);
+            if (!scene.DirectorNotes.ContainsKey("director_guidance"))
+            {
+                scene.DirectorNotes = new Dictionary<string, object?>(scene.DirectorNotes)
+                {
+                    ["director_guidance"] = guidance.ToNotes(),
+                };
+            }
+            guidancePlan.Add(guidance.ToNotes());
+
+            var still = await EnsureSceneStillAsync(project, scene, imagesDir, ct);
+            if (still is null)
+            {
+                log.LogWarning("[LTXDirector] scene {N}: no still available — skipped", scene.SceneNumber);
+                continue;
+            }
+
+            // Song projects: the song is the soundtrack — characters must NOT
+            // speak the lyric lines; keep native ambience only.
+            var dialogue = "";
+            if (!string.IsNullOrWhiteSpace(scene.NarrationText) && project.ProjectType != "song")
+                dialogue = $"The narrator says: \"{scene.NarrationText!.Trim()}\"";
+
+            segments.Add(new LtxSegment(
+                MasterDirector.ApplyCue(scene.Prompt, guidance), dialogue,
+                still, Math.Max(scene.Duration, 1.0)));
+        }
+        await projects.SaveAsync(ct);   // persist any newly assigned guidance
+
+        // persist the storyboard next to the renders (director_guidance.json)
+        try
+        {
+            var projectDir = Path.Combine(_o.Paths.ProjectsDir, project.Id);
+            Directory.CreateDirectory(projectDir);
+            await File.WriteAllTextAsync(Path.Combine(projectDir, "director_guidance.json"),
+                JsonSerializer.Serialize(new Dictionary<string, object> { ["scenes"] = guidancePlan },
+                    new JsonSerializerOptions { WriteIndented = true }), ct);
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "[LTXDirector] guidance save failed");
+        }
+
+        if (segments.Count < 2)
+        {
+            await Fail(project, "LTX Director needs at least 2 scenes with a still image each " +
+                                "(generate stills first, or pin images per scene)");
+            return;
+        }
+
+        await Notify(project.Id, "generate", "running", 5,
+            "LTX Director: rendering the full video (finished directors are checkpointed)");
+        var final = await ltxDirector.GenerateForProjectAsync(project, segments, ct);
+
+        project.OutputPath = final;
+        project.Status = ProjectStatus.Rendered;
+        await projects.SaveAsync(ct);
+        await Notify(project.Id, "generate", "completed", 100,
+            $"LTX Director render complete (1080p): {final}");
+    }
+
+    /// Reference still for a scene, in priority order: user-pinned still →
+    /// latest generation image output/thumbnail → previously rendered batch
+    /// still → freshly generated Z-Image still (saved so resume reuses it).
+    private async Task<string?> EnsureSceneStillAsync(
+        Project project, Scene scene, string imagesDir, CancellationToken ct)
+    {
+        static bool IsImage(string? p) =>
+            p is not null && File.Exists(p) &&
+            Path.GetExtension(p).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".webp";
+
+        if (scene.DirectorNotes.TryGetValue("pinned_still", out var pin) && IsImage(pin?.ToString()))
+            return pin!.ToString();
+        if (scene.DirectorNotes.TryGetValue("pinned_image", out var pim) && IsImage(pim?.ToString()))
+            return pim!.ToString();
+        foreach (var g in scene.Generations.OrderByDescending(g => g.Version))
+        {
+            if (IsImage(g.OutputPath)) return g.OutputPath;
+            if (IsImage(g.ThumbnailPath)) return g.ThumbnailPath;
+        }
+
+        var still = Path.Combine(imagesDir, $"scene_{scene.SceneNumber:000}_still.png");
+        if (File.Exists(still)) return still;   // resume: reuse the earlier still
+
+        // One seed per project so every still shares the same visual "world"
+        // (parity with the Python pipeline's project-locked seed).
+        var seed = System.Convert.ToInt64(
+            System.Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(project.Id)))[..7], 16);
+        var prefix = $"aidir_{scene.Id[..8]}_ltxstill";
+        var wf = workflows.ZImage(scene.Prompt, _o.Image.DefaultWidth, _o.Image.DefaultHeight,
+            _o.Image.ZimageSteps, 1.0, seed, _o.Image.ZimageShift, prefix);
+        var id = await comfy.SubmitAsync(wf, ct);
+        var hist = await comfy.WaitForCompletionAsync(id, ct: ct);
+        await comfy.CollectOutputAsync(hist, still, ct);
+        return File.Exists(still) ? still : null;
     }
 
     private (int W, int H) ResolveResolution(Project project, Scene scene)
