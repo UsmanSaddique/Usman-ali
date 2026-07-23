@@ -346,6 +346,145 @@ Generate the full object now with all {num_scenes} scenes inside the "scenes" ar
 
         return script_data
 
+    def storyboard_from_lyrics(
+        self,
+        context: str,
+        title: str,
+        segments: list,
+        channel_slug: str,
+        seed_key: str,
+    ) -> list[dict]:
+        """LLM visual director for SONG projects: turn each lyric line into ONE
+        concrete scene that (a) shows the exact locked character(s) from the
+        project CONTEXT, (b) sits in the CONTEXT's setting, and (c) DEPICTS THE
+        LITERAL ACTION of that lyric line (so a brushing song actually shows
+        brushing). Replaces the old canned-template builder that ignored both the
+        context and the lyrics. Returns the same shape as
+        lyric_scenes.build_prompts so the caller is a drop-in swap.
+
+        Loads the LLM and does NOT unload (caller/safety gate frees it) — within
+        one run the model stays cached so no second llama_cpp re-init happens."""
+        from app.services import master_director
+
+        profile = self.load_channel_profile(channel_slug) or {}
+        art_style = profile.get("art_style_phrase", "soft 3D Pixar-style cartoon render")
+        palette = profile.get("color_palette", "bright cheerful pastels")
+        if isinstance(palette, dict):
+            palette = palette.get("playtime") or \
+                next(iter(palette.values()), "bright cheerful pastels")
+        elif isinstance(palette, list):
+            palette = ", ".join(str(p) for p in palette)
+        neg = profile.get("negative_prompt_additions",
+                          "photorealistic, realistic skin, text, watermark, scary, "
+                          "deformed, extra limbs, blurry")
+        if isinstance(neg, list):
+            neg = ", ".join(neg)
+
+        # numbered lyric lines with their song section
+        line_rows = []
+        for seg in segments:
+            txt = "(instrumental / no words)" if getattr(seg, "is_instrumental", False) \
+                else (getattr(seg, "text", "") or "").strip()
+            line_rows.append(f'{seg.index + 1}. [{seg.section_type}] "{txt}"')
+        lines_block = "\n".join(line_rows)
+        n = len(segments)
+
+        # Free ComfyUI VRAM so the LLM gets the full GPU, then load (cached if
+        # already resident — no re-init crash within a run).
+        try:
+            import time as _t
+            from app.services.comfyui_client import ComfyUIClient
+            ComfyUIClient().free_vram()
+            _t.sleep(5)
+        except Exception:
+            pass
+        llm = self.manager.load(ModelType.LLM).model
+
+        sys_prompt = (
+            "You are an ELITE visual director and storyboard artist for a children's "
+            "animated MUSIC VIDEO. You are given (A) a CONTEXT that LOCKS the exact "
+            "character(s), setting and art style, and (B) the song's lyric lines in order.\n\n"
+            "For EVERY lyric line, write ONE concrete visual scene description that:\n"
+            "- Shows the EXACT locked character(s) from the CONTEXT — same species, colours "
+            "and signature props. NEVER a human child, NEVER a different animal, NEVER a "
+            "generic character.\n"
+            "- Takes place in the SETTING named in the CONTEXT (do not invent unrelated "
+            "locations like libraries, mosques, meadows, riverbanks).\n"
+            "- DEPICTS THE LITERAL ACTION / MEANING OF THAT LYRIC LINE so the sung moment is "
+            "clearly visible. If the line is 'brush your teeth', the character is actively "
+            "brushing its teeth with its toothbrush; 'show your smile' = it opens wide showing "
+            "teeth; 'rinse and spit' = it sips from the cup at the sink. Translate poetic lines "
+            "into a concrete visible action.\n"
+            "- Is visually DISTINCT from every other scene — vary the pose, the exact beat of "
+            "the action, and the framing. No two descriptions may repeat.\n"
+            "- Is 25-55 words, concrete and physical (who + exact action + a couple of setting/"
+            "light details). ENGLISH only.\n"
+            "- Has NO readable text/letters/numbers in the image, no watermark, no human faces; "
+            "toddler-safe, warm and cute. Do NOT include camera or shot-size jargon — only "
+            "describe what happens in the frame.\n\n"
+            f'Respond with ONLY JSON: {{"scenes":[{{"n":1,"desc":"..."}}, ... exactly {n} '
+            'objects, one per lyric line, same order]}.'
+        )
+        user_msg = (
+            f"CONTEXT (locked characters / setting / style — obey exactly):\n{context}\n\n"
+            f"SONG TITLE: {title}\n\n"
+            f"LYRIC LINES — write one matching scene for each, in order ({n} total):\n"
+            f"{lines_block}\n"
+        )
+
+        logger.info(f"[Director] Storyboarding {n} lyric scenes from context+lyrics")
+        resp = llm.create_chat_completion(
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_msg}],
+            temperature=0.7,
+            max_tokens=self.config.llm.max_tokens,
+            response_format={"type": "json_object"},
+            stream=False,
+        )
+        raw = resp["choices"][0]["message"].get("content", "") or ""
+        try:
+            data = json.loads(self._clean_json(raw))
+        except json.JSONDecodeError:
+            data = self._salvage_truncated(self._clean_json(raw))
+        items = data.get("scenes") or data.get("enhanced") or []
+        by_n = {}
+        for it in items:
+            try:
+                by_n[int(it.get("n"))] = str(it.get("desc", "")).strip()
+            except (TypeError, ValueError):
+                continue
+
+        prompts = []
+        for seg in segments:
+            desc = by_n.get(seg.index + 1, "").strip()
+            if not desc:
+                # context-aware fallback for any line the LLM skipped — still
+                # anchored to the real lyric, never the old template pool.
+                lyric = (getattr(seg, "text", "") or "").strip()
+                desc = (f"the locked main character from the context, in the context's "
+                        f"setting, clearly performing the action of this moment: \"{lyric}\"")
+            guidance = master_director.guidance_for(
+                seg.index, len(segments), seg.section_type, seed_key)
+            full = (f"{guidance['shot']}, {desc}, {art_style}, {palette}, "
+                    f"highly detailed, cinematic, soft volumetric lighting, depth of field, "
+                    f"beautifully rendered, warm rim light, gentle bokeh background, "
+                    f"clean frame without any text, captions, titles or watermarks, "
+                    f"camera: {guidance['camera']}, {guidance['lighting']}, "
+                    f"{guidance['mood']} mood, {guidance['composition']}")
+            prompts.append({
+                "segment_index": seg.index,
+                "prompt": full,
+                "negative_prompt": neg,
+                "camera_motion": ["static", "zoom_in", "pan_left", "pan_right",
+                                  "static", "zoom_in"][seg.index % 6],
+                "narration_text": "" if getattr(seg, "is_instrumental", False) else seg.text,
+                "duration": seg.duration,
+                "director_guidance": guidance,
+            })
+        logger.info(f"[Director] Storyboard built {len(prompts)} context-locked scenes "
+                    f"({len(by_n)} from LLM, {len(prompts) - len(by_n)} fallback)")
+        return prompts
+
     def enhance_prompts(self, scenes: list[dict], channel_slug: str) -> list[dict]:
         """Second-pass 'prompt engineer': rewrite each scene's visual prompt to be
         far richer and more cinematic (texture, layered depth, volumetric lighting,

@@ -586,7 +586,27 @@ class PipelineOrchestrator:
                         segments = synced
                 except Exception as sync_err:
                     logger.warning(f"[Pipeline] Lyric sync failed (using estimates): {sync_err}")
-            prompts = lyric_scenes.build_prompts(segments, profile, project_id)
+            # Primary: LLM visual director — reads the project CONTEXT + each
+            # lyric line and writes a concrete scene that shows the locked
+            # character doing exactly what the line sings (a brushing song
+            # actually brushes). Falls back to the deterministic template builder
+            # only if the LLM storyboard is unusable.
+            prompts = None
+            try:
+                prompts = self.director.storyboard_from_lyrics(
+                    (project.context or "").strip(),
+                    (project.title or "").strip(),
+                    segments, project.channel.slug, project_id)
+                if not prompts or len(prompts) < len(segments):
+                    raise ValueError(
+                        f"storyboard returned {len(prompts) if prompts else 0}/"
+                        f"{len(segments)} scenes")
+                logger.info("[Pipeline] Scenes built via LLM visual director "
+                            "(context + lyric matched)")
+            except Exception as sb_err:
+                logger.warning(f"[Pipeline] LLM storyboard failed ({sb_err}); "
+                               f"falling back to template builder")
+                prompts = lyric_scenes.build_prompts(segments, profile, project_id)
 
             session.query(Scene).filter(Scene.project_id == project_id).delete()
             for p in prompts:

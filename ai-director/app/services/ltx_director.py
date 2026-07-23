@@ -327,11 +327,15 @@ COMFYUI_INPUT = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_
 
 # Extra LoRAs chained into the director's MODEL path (after the template's
 # dynamic_fro09 + transition LoRAs) when present in the loras folder.
-# CameraControls stabilizes/improves camera motion; Crisp_Enhance sharpens.
-EXTRA_LORAS = [
-    ("LTX2.3_CameraControls.safetensors", 0.7),
-    ("LTX2.3_Crisp_Enhance.safetensors", 0.5),
-]
+#
+# 2026-07-22: EMPTIED to match usman's proven "usman created ltx.json" exactly.
+# That reference workflow loads ONLY dynamic_fro09 @1.0 + transition @0.7 (+ the
+# steps=24 override) and produces sharper output FASTER. The two extras below
+# (CameraControls @0.7, Crisp_Enhance @0.5) merged extra weights at every one of
+# the 24 sampling steps × every segment × every director — slower, and a
+# different look than usman's clean stack. Re-add here ONLY if a project needs
+# them; per-project LoRAs still flow through via the `extra_loras` argument.
+EXTRA_LORAS: list[tuple[str, float]] = []
 
 REQUIRED_MODELS = [
     ("loras", "ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors"),
@@ -579,13 +583,17 @@ class LTXDirectorService:
         return client.collect_output(history, output_path)
 
     def _generate_chunked(self, segments: list[dict], project_dir,
-                          out_path: str, chunk_size: int = 6,
+                          out_path: str, chunk_size: int = 5,
                           extra_loras: Optional[list] = None) -> str:
-        """Multi-director videos: run ONE director node per chunk (up to 6
-        segments — the single-director workflow), save that director's part
-        file to disk immediately, then concat the parts. Resumable at
-        DIRECTOR granularity: after a crash/power cut only the director that
-        was mid-render is redone; every finished part is skipped."""
+        """Long videos via MULTIPLE ComfyUI calls, then concat — the proven way
+        to exceed one director's length while staying inside usman's ~6s-segment
+        recipe. Runs ONE single-director LTX call per chunk of `chunk_size`
+        segments (5 × ~5s ≈ 25s per call ≈ 600 frames, within usman's proven
+        720), saves each to ltx_parts/part_XX.mp4 immediately, then ffmpeg-concats
+        every part into one video. There is NO overall length cap — a 3-4 min
+        video is just ~8-10 of these ~25s passes stitched together. Resumable at
+        PART granularity: a crash/power cut only redoes the part mid-render;
+        finished parts are skipped."""
         import os
         chunks = [segments[i:i + chunk_size]
                   for i in range(0, len(segments), chunk_size)]
@@ -712,15 +720,14 @@ class LTXDirectorService:
 
             project_dir = self.config.paths.projects_dir / project_id
             out = str(project_dir / "ltx_director_render.mp4")
-            if len(segments) <= 6:
-                # single director — one workflow, nothing to checkpoint between
+            if len(segments) <= 5:
+                # short video — a single usman-proven director pass, no concat
                 result = self.generate(segments, out, extra_loras=proj_loras)
             else:
-                # MULTI-DIRECTOR: one director node per chunk, each saved to
-                # disk as ltx_parts/part_XX.mp4 the moment it finishes. A crash
-                # or power cut only costs the director that was mid-render —
-                # resume skips every finished part instead of restarting from
-                # director 1.
+                # LONGER video — split into ~25s usman-proven passes (one
+                # ComfyUI call each), saved to ltx_parts/part_XX.mp4 as they
+                # finish, then concatenated. This is how a 3-4 min video is
+                # built: ~8-10 stitched passes. Resume skips finished parts.
                 result = self._generate_chunked(segments, project_dir, out,
                                                 extra_loras=proj_loras)
             project.output_path = result
