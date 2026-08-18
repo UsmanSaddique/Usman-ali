@@ -1,0 +1,27 @@
+name: "Reddit Tales"
+slug: "reddit-tales"
+content_archetype: "reddit_story"   # scrape → narration over looping background
+language: "English"
+made_for_kids: false
+target_audience: "Adults who enjoy narrated internet stories"
+vibe: "Cozy, dramatic storytelling over calm looping visuals"
+
+# Where the scraper pulls from (source: scrape). Public read-only JSON only —
+# no login/OAuth. SFW threads only; the writer retells them in original words.
+reddit:
+  subreddit: "tifu"        # r/tifu, r/AmItheAsshole, r/nosleep (SFW), etc.
+  time_filter: "week"      # hour | day | week | month | year | all
+  limit: 15
+
+art_style_phrase: "soft cinematic ambient background, calm muted colors, gentle depth of field, slow drifting motion"
+negative_prompt_additions: "text, letters, watermark, fast motion, flashing, harsh light"
+
+# Background loop for the voice-over (optional). Drop a file at
+# projects/<id>/assets_in/bg.mp4 to use your own; otherwise the pipeline
+# generates one loop clip from the first scene.
+music_style: "calm lofi ambient, soft piano, mellow beat, instrumental, no vocals"
+
+title_formulas:
+  - "'{Hook} | Reddit Stories'"
+seo_themes:
+  - "reddit stories, askreddit, reddit readings, storytime, narrated reddit"

@@ -658,7 +658,8 @@ button:active { transform: translateY(1px); }
           </div>
           <div class="form-group">
             <label>Channel</label>
-            <select id="wiz-channel"></select>
+            <select id="wiz-channel" onchange="wizArchetypeBadge(); wizOrientHint()"></select>
+            <div id="wiz-archetype-badge" class="text-sm" style="margin-top:6px"></div>
           </div>
           <div class="form-group">
             <label>Video Length</label>
@@ -689,6 +690,16 @@ button:active { transform: translateY(1px); }
               <option value="clips">🎬 Clip-by-clip — 5–6s per clip, full per-scene control</option>
               <option value="ltx_director">🎥 LTX Director — 20–30s long takes per director node, native audio/dialogue, one-shot render</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label>Format / Orientation</label>
+            <select id="wiz-orientation" onchange="wizOrientHint()">
+              <option value="">↳ Inherit channel default</option>
+              <option value="landscape">🖥 Landscape 16:9 — long-form YouTube</option>
+              <option value="vertical">📱 Shorts / Reels 9:16 — vertical (TikTok, YT Shorts, IG)</option>
+              <option value="square">⬛ Square 1:1 — feed posts</option>
+            </select>
+            <span id="wiz-orient-hint" class="text-dim text-sm" style="font-size:.75rem"></span>
           </div>
           <div class="form-group hidden" id="wiz-voice-group">
             <label>Narration Voice (Kokoro)</label>
@@ -2210,9 +2221,23 @@ async function wizInit() {
   wiz.keepState = false;
   document.getElementById('wiz-project-label').textContent = wiz.id ? `project ${wiz.id.slice(0,8)}…` : '';
   try {
-    const channels = await api('/api/channels');
+    const [channels, archetypes] = await Promise.all([
+      api('/api/channels'),
+      api('/api/archetypes').catch(() => []),
+    ]);
+    wiz.channels = channels;
+    wiz.archetypes = {};
+    (archetypes || []).forEach(a => { wiz.archetypes[a.id] = a; });
+    wiz.channelArchetype = {};
+    wiz.channelOrientation = {};
+    channels.forEach(c => {
+      wiz.channelArchetype[c.slug] = c.content_archetype || null;
+      wiz.channelOrientation[c.slug] = c.orientation || 'landscape';
+    });
     document.getElementById('wiz-channel').innerHTML =
       channels.map(c => `<option value="${c.slug}">${esc(c.name)}</option>`).join('');
+    wizArchetypeBadge();
+    wizOrientHint();
   } catch(e) {}
   try {
     const models = await api('/api/available-models');
@@ -2227,6 +2252,39 @@ async function wizInit() {
   wizGo(wiz.step, true);
 }
 
+function wizArchetypeBadge() {
+  const el = document.getElementById('wiz-archetype-badge');
+  if (!el) return;
+  const slug = document.getElementById('wiz-channel').value;
+  const aid = (wiz.channelArchetype || {})[slug];
+  const a = aid ? (wiz.archetypes || {})[aid] : null;
+  if (!a) { el.innerHTML = '<span class="text-dim">Legacy channel (no archetype)</span>'; return; }
+  const tierColor = a.tier === 3 ? '#e5484d' : a.tier === 2 ? '#f5a623' : '#30a46c';
+  let note = '';
+  if (a.is_blocked)
+    note = ' — <b style="color:#e5484d">BLOCKED: do-not-automate niche</b>';
+  else if (a.script_review === 'required')
+    note = ' — <b style="color:#f5a623">human script review required before generation</b>';
+  el.innerHTML =
+    `<span style="display:inline-block;padding:1px 7px;border-radius:10px;background:${tierColor};color:#fff;font-weight:600">`
+    + `Tier ${a.tier}</span> <b>${esc(a.label)}</b> `
+    + `<span class="text-dim">· ${a.audio_mode} · ${a.video_engine} · ${a.visual_mode}`
+    + (a.source === 'scrape' ? ' · scraped' : '') + `</span>${note}`;
+}
+
+function wizOrientHint() {
+  const el = document.getElementById('wiz-orient-hint');
+  if (!el) return;
+  const slug = document.getElementById('wiz-channel').value;
+  const chosen = document.getElementById('wiz-orientation').value;
+  const eff = chosen || (wiz.channelOrientation || {})[slug] || 'landscape';
+  // mirror app/services/orientation.py (short edge = 1080 for '1080p')
+  const dims = { landscape: '832×480 → 1080×1920', vertical: '480×832 → 1080×1920', square: '640×640 → 1080×1080' };
+  const finalD = { landscape: '1920×1080', vertical: '1080×1920', square: '1080×1080' };
+  const label = { landscape: 'Landscape 16:9', vertical: 'Shorts/Reels 9:16', square: 'Square 1:1' }[eff];
+  const clip = { landscape: '832×480', vertical: '480×832', square: '640×640' }[eff];
+  el.innerHTML = `${chosen ? '' : 'inherits '}<b>${label}</b> · clips ${clip} · final ${finalD[eff]}`;
+}
 function wizSetDur(s) { document.getElementById('wiz-duration').value = s; wizHint(); }
 function wizHint() {
   const d = parseFloat(document.getElementById('wiz-duration').value) || 20;
@@ -2469,6 +2527,7 @@ async function wizCreate(fullAuto) {
     video_engine: document.getElementById('wiz-vengine').value,
     project_type: isNarr ? 'narration' : 'song',
     narration_voice: isNarr ? document.getElementById('wiz-voice').value : null,
+    orientation: document.getElementById('wiz-orientation').value || null,
   };
   try {
     const r = await api('/api/projects', 'POST', body);

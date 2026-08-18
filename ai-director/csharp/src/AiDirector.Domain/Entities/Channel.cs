@@ -12,6 +12,7 @@ public class Channel
     public double StillRatio { get; set; } = 0.4;
     public string TargetResolution { get; set; } = "1080p";
     public bool MadeForKids { get; set; }
+    public string? ContentArchetype { get; set; }          // archetype id (archetypes/*.yaml); null=legacy
     public string DefaultVideoModel { get; set; } = "ltx-2.3";
     public string DefaultImageModel { get; set; } = "sdxl";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

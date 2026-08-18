@@ -615,6 +615,7 @@ class PipelineOrchestrator:
                     scene_number=p["segment_index"] + 1,
                     scene_type=SceneType.IMG2VID,
                     prompt=p["prompt"],
+                    motion_prompt=p.get("motion_prompt") or None,
                     negative_prompt=p["negative_prompt"],
                     duration=p["duration"],
                     camera_motion=p["camera_motion"],
@@ -710,12 +711,93 @@ class PipelineOrchestrator:
 
     # ── Phase 3: Asset Generation ──────────────────────────────────────
 
+    def resolve_recipe(self, project_id: str):
+        """Resolve the effective Content Archetype recipe for a project.
+
+        Merges project override > channel (DB) > channel YAML profile > legacy.
+        Returns a ResolvedRecipe. Never raises — unknown archetypes fall back to
+        legacy song/narration behavior. See app/services/archetypes.py."""
+        from app.services import archetypes
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                # nothing to resolve against — a neutral legacy recipe
+                from types import SimpleNamespace
+                return archetypes.resolve(SimpleNamespace(
+                    content_archetype=None, project_type="song", video_engine="clips"))
+            channel = project.channel
+            slug = channel.slug if channel else None
+            profile = self.director.load_channel_profile(slug) if slug else None
+            return archetypes.resolve(project, channel, profile)
+        finally:
+            session.close()
+
+    def _project_orientation(self, project_id: str) -> str:
+        """Canonical output orientation for a project (landscape|vertical|square).
+        Resolved via the archetype recipe (project > channel > archetype). This
+        drives every render size so shorts/reels come out 9:16 end-to-end."""
+        from app.services import orientation as _orient
+        try:
+            return _orient.normalize(self.resolve_recipe(project_id).orientation)
+        except Exception as e:
+            logger.warning(f"[Pipeline] orientation resolve failed: {e}")
+            return "landscape"
+
+    def _orientation_target(self, project_id: str, resolution: str):
+        """Final upscale canvas (w, h) for this project's orientation + label."""
+        from app.services import orientation as _orient
+        return _orient.target_dims(self._project_orientation(project_id), resolution)
+
+    def ensure_archetype_allowed(self, project_id: str):
+        """Tier-3 guard: refuse to spend GPU on a niche whose archetype is
+        disabled / Tier-3 (real footage, physics, IP, or human authenticity that
+        local AI cannot fake). Single choke point before any generation."""
+        recipe = self.resolve_recipe(project_id)
+        if recipe.is_blocked:
+            msg = recipe.block_reason()
+            self._emit_progress(
+                phase=PipelinePhase.ERROR, project_id=project_id, error="archetype",
+                message=f"Archetype blocked: {msg}")
+            raise ArchetypeBlocked(msg)
+        return recipe
+
+    def ensure_script_review(self, project_id: str):
+        """Tier-2 hard-stop: when the archetype requires human script review
+        (facts/health/faith), refuse to proceed to audio/video until a human has
+        signed off via POST /api/projects/{id}/approve-script (sets reviewed=1).
+        Raises ScriptReviewRequired otherwise. Tier-1 archetypes no-op."""
+        recipe = self.resolve_recipe(project_id)
+        if recipe.script_review != "required":
+            return recipe
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            reviewed = bool(getattr(project, "reviewed", False)) if project else False
+        finally:
+            session.close()
+        if reviewed:
+            return recipe
+        self._emit_progress(
+            phase=PipelinePhase.SAFETY, project_id=project_id, error="review",
+            message=(f"Human review REQUIRED for this archetype "
+                     f"({recipe.label}, Tier {recipe.tier}) — verify the script, "
+                     f"then approve to continue."))
+        raise ScriptReviewRequired(
+            f"Archetype '{recipe.archetype_id}' (Tier {recipe.tier}) requires human "
+            f"script review before generation. Verify the script and POST "
+            f"/api/projects/{project_id}/approve-script to proceed.")
+
     def ensure_safety(self, project_id: str, use_llm: bool = True):
         """UNIVERSAL YT-safety gate — every project type, before ANY GPU spend.
 
         Honors the latest stored SafetyReport (pass/override lets generation
         run); with no report on file it runs the gate now. Raises SafetyBlocked
         on block/revise. Kill switch: AIDIR_SAFETY_ENFORCE=0."""
+        # Archetype gate always runs first (independent of the safety kill switch):
+        # a Tier-3 niche must never generate, even if safety enforcement is off.
+        recipe = self.ensure_archetype_allowed(project_id)
+
         if os.environ.get("AIDIR_SAFETY_ENFORCE", "1") == "0":
             return
         from app.services import yt_safety
@@ -725,11 +807,19 @@ class PipelineOrchestrator:
         finally:
             session.close()
 
-        if verdict is None:
+        # Strict-gate archetypes (Tier 2) always force the LLM critic + IP
+        # deny-list, and cannot ride a stale non-LLM pass verdict.
+        strict = recipe.safety_gate == "strict"
+        if strict:
+            use_llm = True
+
+        if verdict is None or strict:
             self._emit_progress(
                 phase=PipelinePhase.SAFETY, project_id=project_id,
                 message="Running YouTube safety gate on the script...")
-            result = self.safety.run_gate(project_id, use_llm=use_llm)
+            result = self.safety.run_gate(
+                project_id, use_llm=use_llm,
+                ip_denylist=list(getattr(recipe, "ip_denylist", []) or []))
             verdict = result.verdict
 
         if verdict in ("pass", "override"):
@@ -765,14 +855,19 @@ class PipelineOrchestrator:
         self._cancel_flag = False
         self._batch_mode = batch
         self._video_model_loaded = False
-        # No explicit resolution -> use 832x480, NOT the model-family default
-        # (1152x640): with the Gemma-12B text encoder resident, LTX-22B only
-        # partially fits at 1152x640 and crawls at 15-72s/step (~10min/clip)
-        # instead of ~5s/step. 832x480 is measured VRAM-safe on the 16GB card.
+        # No explicit resolution -> derive from the project's orientation. The
+        # landscape budget is 832x480 (NOT the model-family default 1152x640:
+        # with the Gemma-12B text encoder resident, LTX-22B only partially fits
+        # at 1152x640 and crawls ~10min/clip). Vertical (shorts/reels) swaps the
+        # axes to 480x832 for the SAME VRAM-safe pixel budget. See orientation.py.
+        from app.services import orientation as _orient
+        orient = self._project_orientation(project_id)
+        _bw, _bh = _orient.base_dims(orient)
+        _pw, _ph = _orient.premium_dims(orient)
         if width is None:
-            width = 832
+            width = _bw
         if height is None:
-            height = 480
+            height = _bh
         if batch:
             logger.info("[Pipeline] Batch mode: keeping video model resident across scenes")
         session = get_session()
@@ -861,8 +956,10 @@ class PipelineOrchestrator:
 
                 is_premium = scene.id in premium_ids
                 vc = self.config.video
-                s_width = vc.premium_width if is_premium else width
-                s_height = vc.premium_height if is_premium else height
+                # Premium opening dims follow orientation (vertical 544x960),
+                # not the landscape-only config constants.
+                s_width = _pw if is_premium else width
+                s_height = _ph if is_premium else height
                 s_steps = vc.premium_steps if is_premium else None
                 if is_premium:
                     logger.info(
@@ -883,8 +980,7 @@ class PipelineOrchestrator:
                     # Inline upscale: finish the clip completely before moving on
                     if upscale_inline and generation.output_path:
                         try:
-                            res_map = {"1080p": (1920, 1080), "2k": (2560, 1440), "4k": (3840, 2160)}
-                            tw, th = res_map.get(project.channel.target_resolution, (1920, 1080))
+                            tw, th = _orient.target_dims(orient, project.channel.target_resolution)
                             up = self.upscaler.upscale_video(
                                 input_path=generation.output_path,
                                 target_width=tw, target_height=th,
@@ -1263,6 +1359,7 @@ class PipelineOrchestrator:
                     steps=steps,
                     seed=scene_seed,
                     clear_vram_first=clear_vram,
+                    motion_prompt=getattr(scene, "motion_prompt", None),
                 )
                 self._video_model_loaded = True
                 gen.model_used = result.model_used
@@ -1356,6 +1453,7 @@ class PipelineOrchestrator:
                         steps=steps,
                         seed=scene_seed,
                         clear_vram_first=need_vram_free,
+                        motion_prompt=getattr(scene, "motion_prompt", None),
                     )
                     self._video_model_loaded = True
                     gen.model_used = f"{image_engine}+{result.model_used}"
@@ -1832,17 +1930,31 @@ class PipelineOrchestrator:
             t += float(s.duration or 4.0)
         return ids
 
-    def _max_clip_seconds(self, video_model: Optional[str]) -> float:
-        """Longest clip the video model can physically render — the largest
-        8n+1 frame count within max_num_frames, at the model family's fps
-        (121f @ 24fps = 5.04s for LTX). Scene durations above this silently
-        render at the cap, so planners must respect it."""
+    def _clip_fps_for(self, project_id: Optional[str], video_model: Optional[str]) -> int:
+        """Effective clip fps. An archetype may LOWER fps (e.g. ASMR at 12fps)
+        to get LONGER clips within the fixed 121-frame VRAM cap; otherwise the
+        model-family default (LTX = 24fps)."""
         from app.services.comfyui_client import get_defaults_for_model
+        if project_id:
+            try:
+                r = self.resolve_recipe(project_id)
+                if getattr(r, "clip_fps", None):
+                    return int(r.clip_fps)
+            except Exception:
+                pass
         try:
-            fps = int(get_defaults_for_model(video_model or "").get("fps")
-                      or self.config.video.default_fps)
+            return int(get_defaults_for_model(video_model or "").get("fps")
+                       or self.config.video.default_fps)
         except Exception:
-            fps = int(self.config.video.default_fps)
+            return int(self.config.video.default_fps)
+
+    def _max_clip_seconds(self, video_model: Optional[str],
+                          project_id: Optional[str] = None) -> float:
+        """Longest clip the video model can physically render — the largest
+        8n+1 frame count within max_num_frames, at the effective fps
+        (121f @ 24fps = 5.04s for LTX; @ 12fps = ~10s for ASMR). Scene durations
+        above this silently render at the cap, so planners must respect it."""
+        fps = self._clip_fps_for(project_id, video_model)
         max_frames = int(getattr(self.config.video, "max_num_frames", 97))
         frames = ((max_frames - 1) // 8) * 8 + 1
         return frames / max(fps, 1)
@@ -1857,9 +1969,9 @@ class PipelineOrchestrator:
         assembly. Frames are capped at config.video.max_num_frames — the
         bench-measured VRAM-safe ceiling for LTX-22B at 832x480 on 16GB.
         """
-        from app.services.comfyui_client import get_defaults_for_model
-        fps = int(get_defaults_for_model(video_model).get("fps")
-                  or self.config.video.default_fps)
+        # Effective fps may be lowered per-archetype (ASMR 12fps) so a single
+        # 121-frame clip covers ~10s instead of ~5s. Falls back to model default.
+        fps = self._clip_fps_for(getattr(scene, "project_id", None), video_model)
         max_frames = int(getattr(self.config.video, "max_num_frames", 97))
         num_frames = min(int(float(scene.duration or 4.0) * fps), max_frames)
         # LTX only generates 8n+1 frame counts and silently rounds DOWN —
@@ -2003,9 +2115,8 @@ class PipelineOrchestrator:
             project.status = ProjectStatus.UPSCALING
             session.commit()
 
-            res_map = {"1080p": (1920, 1080), "2k": (2560, 1440)}
             channel = project.channel
-            target_res = res_map.get(channel.target_resolution, (1920, 1080))
+            target_res = self._orientation_target(project_id, channel.target_resolution)
 
             for i, scene in enumerate(scenes):
                 self._check_cancel()
@@ -2141,9 +2252,8 @@ class PipelineOrchestrator:
                 logger.info(f"[Pipeline] Scene {scene.scene_number} already upscaled")
                 return
 
-            res_map = {"1080p": (1920, 1080), "2k": (2560, 1440)}
             channel = project.channel
-            target_res = res_map.get(channel.target_resolution, (1920, 1080))
+            target_res = self._orientation_target(project_id, channel.target_resolution)
 
             self._emit_progress(
                 phase=PipelinePhase.UPSCALING,
@@ -2506,6 +2616,7 @@ class PipelineOrchestrator:
                 music_path=music_path,
                 resolution=out_resolution,
                 transition_duration=self.config.generation.transition_duration,
+                orientation=self._project_orientation(project_id),
             )
 
             # Save render job
@@ -2812,6 +2923,7 @@ class PipelineOrchestrator:
                 music_path=music_path,
                 sfx_tracks=sfx_tracks,
                 resolution=out_resolution,
+                orientation=self._project_orientation(project_id),
             )
 
             session.add(RenderJob(
@@ -2958,6 +3070,15 @@ class PipelineOrchestrator:
             return self._run_full_auto_narration_impl(project_id)
 
     def _run_full_auto_narration_impl(self, project_id: str):
+        # Ambient archetypes (ai_dreamscape / satisfying): no voice at all —
+        # a music/soundscape bed over surreal looping visuals. Separate chain.
+        try:
+            recipe = self.resolve_recipe(project_id)
+        except Exception:
+            recipe = None
+        if recipe and getattr(recipe, "audio_mode", "") == "ambient":
+            return self._run_full_auto_ambient_impl(project_id)
+
         logger.info(f"[Pipeline] Full-auto NARRATION run for {project_id}")
         try:
             from app.services import qa as qa_svc
@@ -2978,15 +3099,42 @@ class PipelineOrchestrator:
                 Scene.project_id == project_id).count() > 0
             session.close()
 
+            # Phase 0: scrape source (reddit_story) — pull a thread into the
+            # project context BEFORE the writer runs. Best-effort; a failure
+            # just leaves the existing context in place.
+            if not has_script:
+                try:
+                    self._ensure_scrape_context(project_id)
+                except Exception as sc_err:
+                    logger.warning(f"[Pipeline] Scrape source skipped: {sc_err}")
+                # qa_pairs planner (funny_ai_qa): steer the writer to a Q&A,
+                # deliberately-surreal format before it runs.
+                try:
+                    self._ensure_qa_directive(project_id)
+                except Exception as qa_err:
+                    logger.warning(f"[Pipeline] QA directive skipped: {qa_err}")
+
             # Phase 1: script (includes the universal safety gate)
             if not has_script:
                 self.generate_narration_script(project_id)
             # Safety enforcement even when the script pre-exists
             self.ensure_safety(project_id)
+            # Tier-2 archetypes: hard-stop for human script review before any
+            # audio/video is generated (raises ScriptReviewRequired otherwise).
+            self.ensure_script_review(project_id)
 
             # Phase 2: narration master + beat-planned scenes
             if not (has_audio and has_scenes):
                 self.generate_narration_audio(project_id)
+
+            # reddit_broll / voice_over_bg: instead of generating one clip per
+            # scene, lay the narration over a single LOOPING background clip.
+            recipe = self.resolve_recipe(project_id)
+            if getattr(recipe, "visual_mode", "") in ("reddit_broll", "voice_over_bg"):
+                out = self._render_bg_loop(project_id, recipe)
+                if out:
+                    logger.info(f"[Pipeline] bg-loop render complete: {out}")
+                    return
 
             # Engine routing: LTX Director renders the whole video natively
             # (narration lines become spoken dialogue per segment).
@@ -2997,13 +3145,13 @@ class PipelineOrchestrator:
                 self.generate_ltx_director(project_id)
                 return
 
-            # Phase 3: visuals — batch mode, VRAM-safe resolution
+            # Phase 3: visuals — batch mode. Resolution is derived from the
+            # project orientation inside start_generation (VRAM-safe per axis).
             session = get_session()
             p = session.query(Project).get(project_id)
             inline = bool(getattr(p, "upscale_inline", True))
             session.close()
-            self.start_generation(project_id, width=832, height=480,
-                                  batch=True, upscale_inline=inline)
+            self.start_generation(project_id, batch=True, upscale_inline=inline)
 
             # Phase 4: upscale stragglers
             try:
@@ -3036,9 +3184,412 @@ class PipelineOrchestrator:
             self._emit_progress(phase=PipelinePhase.ERROR, error=str(e),
                                 message=f"Pipeline failed: {e}")
 
+    # ── bg-loop render (reddit_broll / voice_over_bg visual modes) ─────────
+
+    def _render_bg_loop(self, project_id: str, recipe=None) -> Optional[str]:
+        """Lay the narration WAV over ONE looping background clip (no per-scene
+        generation). Background source priority: user file in assets_in/
+        (bg.*/background.*) → a single generated clip from scene 1 → skip.
+        Muxes narration; if an active music track exists it is ducked under the
+        voice. Returns the output path, or None if it could not render."""
+        import subprocess
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                return None
+            narration = project.narration_audio_path
+            first_scene = (session.query(Scene)
+                           .filter(Scene.project_id == project_id)
+                           .order_by(Scene.scene_number).first())
+            music = session.query(MusicTrack).filter(
+                MusicTrack.project_id == project_id,
+                MusicTrack.is_active == True).first()
+            music_path = music.output_path if music else None
+        finally:
+            session.close()
+
+        if not (narration and Path(narration).exists()):
+            logger.warning("[Pipeline] bg-loop: no narration audio — cannot render")
+            return None
+
+        # 1. background clip
+        bg = self._find_user_asset(project_id, ("bg", "background"),
+                                   (".mp4", ".mov", ".webm", ".mkv"))
+        if not bg and first_scene is not None:
+            # generate a single reusable loop clip from the first scene
+            try:
+                self.start_generation(project_id, scene_ids=[first_scene.id],
+                                      batch=False)
+                session = get_session()
+                try:
+                    s = session.query(Scene).get(first_scene.id)
+                    gen = s.active_generation if s else None
+                    bg = (gen.upscaled_path or gen.output_path) if gen else None
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.warning(f"[Pipeline] bg-loop: clip generation failed: {e}")
+        if not bg or not Path(bg).exists():
+            logger.warning("[Pipeline] bg-loop: no background clip available")
+            return None
+
+        # 2. durations + output path
+        dur = self._media_duration(narration) or float(
+            self._safe_project_field(project_id, "duration_target", 60))
+        out_dir = self.config.paths.projects_dir / project_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = str(out_dir / "final_bgloop.mp4")
+        ff = self.config.paths.ffmpeg_bin
+
+        # 3. ffmpeg: loop bg to narration length, mix VO (+ ducked music)
+        cmd = [ff, "-y", "-stream_loop", "-1", "-i", str(bg), "-i", str(narration)]
+        if music_path and Path(music_path).exists():
+            cmd += ["-i", str(music_path),
+                    "-filter_complex",
+                    # music ducked well under the voice, then summed
+                    "[2:a]volume=0.18[m];[1:a][m]amix=inputs=2:duration=first[a]",
+                    "-map", "0:v:0", "-map", "[a]"]
+        else:
+            cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+        cmd += ["-t", f"{dur:.2f}", "-c:v", "libx264", "-preset", "medium",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+                "-shortest", out_path]
+
+        self._emit_progress(phase=PipelinePhase.ASSEMBLING, project_id=project_id,
+                            message="Rendering narration over looping background...")
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"[Pipeline] bg-loop ffmpeg failed: {e.stderr.decode('utf-8', 'ignore')[:500]}")
+            return None
+
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            project.output_path = out_path
+            project.status = ProjectStatus.RENDERED
+            session.commit()
+        finally:
+            session.close()
+        return out_path
+
+    def _find_user_asset(self, project_id: str, stems: tuple, exts: tuple) -> Optional[str]:
+        """First file in the project's assets_in/ whose stem is in `stems` and
+        extension in `exts` (case-insensitive). None if absent."""
+        assets_in = self.config.paths.projects_dir / project_id / "assets_in"
+        if not assets_in.exists():
+            return None
+        for f in assets_in.iterdir():
+            if f.is_file() and f.stem.lower() in stems and f.suffix.lower() in exts:
+                return str(f)
+        return None
+
+    def _media_duration(self, path: str) -> Optional[float]:
+        """Duration in seconds via ffprobe; None on failure."""
+        import subprocess
+        try:
+            ff = self.config.paths.ffmpeg_bin
+            probe = ff.replace("ffmpeg", "ffprobe")
+            out = subprocess.run(
+                [probe, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                capture_output=True, text=True, check=True)
+            return float(out.stdout.strip())
+        except Exception:
+            return None
+
+    def _safe_project_field(self, project_id: str, field: str, default):
+        session = get_session()
+        try:
+            p = session.query(Project).get(project_id)
+            return getattr(p, field, default) if p else default
+        finally:
+            session.close()
+
+    # ── qa_pairs planner (funny_ai_qa archetype) ───────────────────────────
+
+    def _ensure_qa_directive(self, project_id: str):
+        """For scene_planner=qa_pairs (funny_ai_qa): prepend a directive so the
+        narration writer produces a Q&A script where each beat is a question the
+        'AI' answers absurdly, paired with a deliberately surreal, glitchy visual
+        prompt. The comedy IS the AI weirdness — lean into it. No-op otherwise."""
+        recipe = self.resolve_recipe(project_id)
+        if getattr(recipe, "scene_planner", "") != "qa_pairs":
+            return
+        directive = (
+            "FORMAT: 'Asking AI ridiculous questions'. Structure the script as a "
+            "series of Q&A beats: each beat is a short funny question followed by "
+            "the AI's absurd, confidently-wrong, unexpectedly-hilarious answer. "
+            "For every beat, the visual_prompt must be a deliberately SURREAL, "
+            "dreamlike, impossible image that literally illustrates the absurd "
+            "answer (melting objects, impossible physics, wrong-scale creatures). "
+            "Keep it wholesome and advertiser-friendly — weird, not offensive.")
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                return
+            ctx = (project.context or "").strip()
+            if directive[:40] in ctx:
+                return  # already applied
+            project.context = (directive + "\n\n" + ctx).strip()
+            session.commit()
+        finally:
+            session.close()
+
+    # ── Scrape source (reddit_story archetype) ─────────────────────────────
+
+    def _ensure_scrape_context(self, project_id: str):
+        """For source=scrape archetypes (reddit_story): fetch a top thread and
+        write it into project.context so the narration writer retells it. The
+        subreddit + time filter come from the channel profile's `reddit:` block
+        (or project.context if it just names a subreddit). No-op otherwise."""
+        recipe = self.resolve_recipe(project_id)
+        if getattr(recipe, "source", "llm") != "scrape":
+            return
+        from app.services import reddit_source
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project:
+                return
+            slug = project.channel.slug if project.channel else None
+            existing_ctx = (project.context or "").strip()
+        finally:
+            session.close()
+
+        profile = {}
+        try:
+            profile = self.director.load_channel_profile(slug) or {}
+        except Exception:
+            pass
+        rcfg = (profile or {}).get("reddit", {}) or {}
+        subreddit = rcfg.get("subreddit")
+        # allow the project context to name the subreddit ("r/tifu")
+        if not subreddit and existing_ctx.lower().startswith("r/"):
+            subreddit = existing_ctx.split()[0]
+        if not subreddit:
+            logger.info("[Pipeline] scrape: no subreddit configured — using existing context")
+            return
+        time_filter = rcfg.get("time_filter", "week")
+        limit = int(rcfg.get("limit", 15))
+
+        threads = reddit_source.fetch_top(subreddit, limit=limit, time_filter=time_filter)
+        best = reddit_source.pick_best(threads)
+        if not best:
+            logger.info(f"[Pipeline] scrape: no usable threads in r/{subreddit}")
+            return
+        context = reddit_source.format_for_narration(best)
+
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            project.context = context
+            if not (project.title or "").strip() or project.title == "Untitled":
+                project.title = best.title[:120]
+            session.commit()
+        finally:
+            session.close()
+        logger.info(f"[Pipeline] scrape: pulled r/{subreddit} thread "
+                    f"'{best.title[:60]}' ({best.word_count} words)")
+
+    # ── Ambient mode: full auto (no voice — music/soundscape bed) ──────────
+
+    def _plan_ambient_scenes(self, project_id: str, recipe) -> int:
+        """Build fixed-duration surreal scenes for an ambient project from its
+        narration script's visual prompts (the beats are NEVER spoken here).
+        No narration windows — the music bed is the master audio. Returns the
+        scene count."""
+        import json as _json
+        from app.services import narration_scenes
+        session = get_session()
+        try:
+            project = session.query(Project).get(project_id)
+            if not project or not project.narration_script:
+                raise ValueError("Ambient plan needs a script — run script first")
+            script = _json.loads(project.narration_script)
+            slug = project.channel.slug if project.channel else None
+            # cap honors the archetype fps (ASMR 12fps -> ~10s clips)
+            cap = self._max_clip_seconds(project.video_model, project_id)
+            target = float(project.duration_target or 60)
+        finally:
+            session.close()
+
+        profile = {}
+        try:
+            profile = self.director.load_channel_profile(slug) or {}
+        except Exception:
+            pass
+
+        beats = narration_scenes.flatten_beats(script)
+        if not beats:
+            raise ValueError("Ambient plan: script produced no beats")
+
+        # Clip length comes from the archetype (ASMR wants long ~10s clips), then
+        # clamped to the physical cap. Scene COUNT covers the target duration —
+        # NOT the beat count, so a 30s reel is a few long clips, not a dozen tiny
+        # ones. (Fixes short reels over-planning 12 scenes.)
+        clip = float(getattr(recipe, "clip_seconds", None) or min(float(cap), 6.0))
+        clip = max(2.0, min(clip, float(cap)))
+        n_needed = max(1, int(round(target / clip)))
+        # A channel-level MOTION directive (what happens over each clip — e.g. the
+        # is-it-cake knife slice) is authored separately from the still's image
+        # prompt, so the video prompt is no longer just the still re-fed.
+        motion_directive = (profile or {}).get("motion_directive", "")
+        if isinstance(motion_directive, list):
+            motion_directive = " ".join(str(m) for m in motion_directive)
+
+        # cycle beats if we need more scenes than the script has
+        planned = []
+        for i in range(n_needed):
+            beat = beats[i % len(beats)]
+            prompt = narration_scenes._style_prompt(beat, profile, "cinematic")
+            neg = (profile or {}).get("negative_prompt_additions", "")
+            if isinstance(neg, list):
+                neg = ", ".join(neg)
+            planned.append({
+                "scene_number": i + 1,
+                # surreal loops animate best from a still; img2vid per archetype
+                "scene_type": "img2vid",
+                "prompt": prompt,
+                "motion_prompt": motion_directive or "",
+                "negative_prompt": neg or "",
+                "duration": clip,
+                "visual_type": beat.get("visual_type", "broll"),
+                "sfx_prompt": beat.get("sfx_prompt", ""),
+            })
+
+        session = get_session()
+        try:
+            session.query(Scene).filter(Scene.project_id == project_id).delete()
+            for p in planned:
+                session.add(Scene(
+                    project_id=project_id,
+                    scene_number=p["scene_number"],
+                    scene_type=SceneType(p["scene_type"]),
+                    prompt=p["prompt"],
+                    motion_prompt=p.get("motion_prompt") or None,
+                    negative_prompt=p["negative_prompt"],
+                    duration=p["duration"],
+                    camera_motion="slow_zoom",
+                    narration_text="",     # ambient = no voice
+                    visual_type=p["visual_type"],
+                    sfx_prompt=p["sfx_prompt"],
+                    status=SceneStatus.PENDING,
+                ))
+            project = session.query(Project).get(project_id)
+            project.total_scenes = len(planned)
+            project.completed_scenes = 0
+            project.status = ProjectStatus.APPROVED
+            session.commit()
+        finally:
+            session.close()
+        return len(planned)
+
+    def _run_full_auto_ambient_impl(self, project_id: str):
+        """Ambient end-to-end: script (prompts+SEO+safety) → fixed-duration
+        surreal scenes → visuals → music/soundscape bed (NO TTS) → render.
+        Resumable: skips phases whose artifacts already exist."""
+        logger.info(f"[Pipeline] Full-auto AMBIENT run for {project_id}")
+        try:
+            from app.services import qa as qa_svc
+            self._qa_notes = {"scenes": []}
+            pf = qa_svc.preflight(self.config)
+            self._qa_notes["preflight"] = pf.to_dict()
+            if not pf.ok:
+                self._emit_progress(phase=PipelinePhase.ERROR, error="preflight",
+                                    message=f"Preflight failed: {pf.summary()}")
+                return
+
+            session = get_session()
+            project = session.query(Project).get(project_id)
+            has_script = bool(project.narration_script)
+            has_scenes = session.query(Scene).filter(
+                Scene.project_id == project_id).count() > 0
+            session.close()
+
+            # Phase 1: script (prompts + SEO) + universal safety gate + Tier gates
+            if not has_script:
+                self.generate_narration_script(project_id)
+            self.ensure_safety(project_id)
+            self.ensure_script_review(project_id)
+
+            # Phase 2: fixed-duration surreal scenes (no narration windows)
+            recipe = self.resolve_recipe(project_id)
+            if not has_scenes:
+                n = self._plan_ambient_scenes(project_id, recipe)
+                logger.info(f"[Pipeline] Ambient: planned {n} scenes")
+
+            # Phase 3: visuals — archetype engine (ai_dreamscape = ltx_director)
+            if self._project_video_engine(project_id) == "ltx_director":
+                self._ensure_scene_stills(project_id)
+                self.generate_ltx_director(project_id)
+            else:
+                self.start_generation(project_id, batch=True, upscale_inline=True)
+                try:
+                    self.start_upscale(project_id)
+                except Exception as up_err:
+                    logger.warning(f"[Pipeline] Ambient upscale skipped: {up_err}")
+
+            # Phase 4: ambient music/soundscape bed (instrumental, NO vocals/TTS)
+            try:
+                self._ensure_ambient_music_bed(project_id, recipe)
+            except Exception as mus_err:
+                logger.warning(f"[Pipeline] Ambient music bed skipped: {mus_err}")
+
+            # Phase 5: standard song-style render (music soundtrack over clips)
+            if self._project_video_engine(project_id) != "ltx_director":
+                self.render(project_id)
+            logger.info(f"[Pipeline] Ambient full-auto complete: {project_id}")
+
+        except PipelinePaused:
+            logger.info(f"[Pipeline] Ambient run paused for {project_id}")
+        except SafetyBlocked as sb:
+            logger.info(f"[Pipeline] Ambient halted for {project_id}: {sb}")
+        except Exception as e:
+            logger.error(f"[Pipeline] Ambient full-auto failed: {e}", exc_info=True)
+            self._emit_progress(phase=PipelinePhase.ERROR, error=str(e),
+                                message=f"Pipeline failed: {e}")
+
+    def _ensure_ambient_music_bed(self, project_id: str, recipe=None):
+        """Generate an instrumental ambient soundscape bed as the master audio.
+        Prefers a user-supplied music file, else an existing track, else
+        generates one from the channel's music style (or a safe default)."""
+        user_music = self._find_user_audio(project_id, "music")
+        if user_music:
+            return
+        session = get_session()
+        try:
+            existing = session.query(MusicTrack).filter(
+                MusicTrack.project_id == project_id,
+                MusicTrack.is_active == True,
+            ).first()
+            if existing and existing.output_path and Path(existing.output_path).exists():
+                return
+            project = session.query(Project).get(project_id)
+            style = (project.music_style or "").strip() if project else ""
+        finally:
+            session.close()
+        if not style:
+            style = ("dreamy ambient soundscape, slow evolving synth pads, "
+                     "soft textures, no drums, no vocals, calm meditative, "
+                     "instrumental, satisfying gentle atmosphere")
+        self.generate_music(project_id, style=style, lyrics="", vocals=False)
+
     def _project_video_engine(self, project_id: str) -> str:
         """Per-project generation engine: 'clips' (default, one 5-6s ComfyUI
-        job per scene) or 'ltx_director' (multi-director one-shot workflow)."""
+        job per scene) or 'ltx_director' (multi-director one-shot workflow).
+
+        The Content Archetype is authoritative when one is set (e.g.
+        ai_dreamscape forces ltx_director); otherwise falls back to the
+        project's own video_engine field (legacy)."""
+        try:
+            recipe = self.resolve_recipe(project_id)
+            if recipe.archetype_id:
+                return recipe.video_engine
+        except Exception as e:
+            logger.warning(f"[Pipeline] recipe engine resolve failed: {e}")
         session = get_session()
         try:
             p = session.query(Project).get(project_id)
@@ -3058,10 +3609,13 @@ class PipelineOrchestrator:
             images_dir = self.config.paths.projects_dir / project_id / "images"
             images_dir.mkdir(parents=True, exist_ok=True)
             self._pregenerated_stills = {}
-            # 16:9 stills — the director crops references to 1280x720, so
-            # matching aspect avoids losing composition
+            # Reference stills match the project orientation so the director's
+            # aspect-preserving crop keeps composition (16:9 -> 1280x720,
+            # 9:16 shorts -> 720x1280, 1:1 -> 960x960).
+            from app.services import orientation as _orient
+            _sw, _sh = _orient.still_dims(self._project_orientation(project_id))
             self._pre_generate_stills(scenes, images_dir, session,
-                                      width=1280, height=720)
+                                      width=_sw, height=_sh)
         finally:
             session.close()
 
@@ -3200,18 +3754,22 @@ class PipelineOrchestrator:
                 # 1. Native 720p generation
                 raw_out = svc.generate_for_project(project_id)
                 
-                # 2. Upscale to 1080p via FFmpeg Lanczos
+                # 2. Upscale to the orientation-correct 1080p canvas via FFmpeg
+                # Lanczos (1920x1080 landscape, 1080x1920 vertical shorts). Fit
+                # + pad preserves aspect if the native render differs.
+                _tw, _th = self._orientation_target(project_id, "1080p")
                 self._emit_progress(
                     phase=PipelinePhase.UPSCALING, project_id=project_id,
-                    message="LTX Director: upscaling final video to 1080p...")
-                
+                    message=f"LTX Director: upscaling final video to {_tw}x{_th}...")
+
                 project_dir = self.config.paths.projects_dir / project_id
                 final_out = str(project_dir / "final_render.mp4")
-                
+
                 ffmpeg_cmd = [
                     str(self.config.paths.ffmpeg_bin), "-y",
                     "-i", raw_out,
-                    "-vf", "scale=1920:1080:flags=lanczos",
+                    "-vf", (f"scale={_tw}:{_th}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                            f"pad={_tw}:{_th}:(ow-iw)/2:(oh-ih)/2,setsar=1"),
                     "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                     "-c:a", "copy",
                     final_out
@@ -3272,12 +3830,10 @@ class PipelineOrchestrator:
         # Narration projects have their own phase chain (script→voice→beats→
         # visuals→sfx→exact render). One routing point here means resume,
         # auto-resume, /full-auto and /produce all pick the right pipeline.
-        session = get_session()
-        try:
-            p = session.query(Project).get(project_id)
-            ptype = getattr(p, "project_type", "song") if p else "song"
-        finally:
-            session.close()
+        # The archetype's audio_mode chooses the lane: song → song chain,
+        # narration/ambient → narration chain (ambient skips TTS downstream).
+        recipe = self.resolve_recipe(project_id)
+        ptype = recipe.project_type
         if ptype == "narration":
             return self.run_full_auto_narration(project_id)
         with self._exclusive("full-auto"):
@@ -3378,7 +3934,17 @@ class PipelineOrchestrator:
             self._emit_progress(
                 phase=PipelinePhase.SAFETY, project_id=project_id,
                 message="YT safety gate: reviewing script/lyrics/metadata...")
-            gate = self.safety.run_gate(project_id, use_llm=True)
+            # Tier-3 archetype guard: refuse do-not-automate niches before any
+            # GPU/LLM spend (raises ArchetypeBlocked → caught below).
+            recipe = self.ensure_archetype_allowed(project_id)
+            # AIDIR_SAFETY_LLM=0 → rules-only gate (skips the 27B critic). Avoids
+            # the llama_cpp 2nd-load hard crash (script LLM already loaded this
+            # process) and is fine for vetted clean kids channels. Default keeps
+            # the LLM critic on.
+            _safety_use_llm = os.environ.get("AIDIR_SAFETY_LLM", "1") != "0"
+            gate = self.safety.run_gate(
+                project_id, use_llm=_safety_use_llm,
+                ip_denylist=list(getattr(recipe, "ip_denylist", []) or []))
             if gate.verdict not in ("pass", "override"):
                 session = get_session()
                 project = session.query(Project).get(project_id)
@@ -3394,6 +3960,10 @@ class PipelineOrchestrator:
                     message=f"Safety gate verdict '{gate.verdict}' — "
                             f"{len(gate.issues)} issue(s); see safety report.")
                 return
+
+            # Tier-2 archetypes: hard-stop for human script review before any
+            # GPU generation (raises ScriptReviewRequired → caught below).
+            self.ensure_script_review(project_id)
 
             # Auto-approve all scenes
             session = get_session()
@@ -3445,8 +4015,7 @@ class PipelineOrchestrator:
             p = session.query(Project).get(project_id)
             inline = bool(getattr(p, "upscale_inline", True))
             session.close()
-            self.start_generation(project_id, width=832, height=480, batch=True,
-                                  upscale_inline=inline)
+            self.start_generation(project_id, batch=True, upscale_inline=inline)
 
             # Phase 4: Upscale (skips scenes already upscaled inline / previous run)
             try:
@@ -3498,6 +4067,10 @@ class PipelineOrchestrator:
                 phase=PipelinePhase.IDLE,
                 message="Pipeline cancelled",
             )
+        except SafetyBlocked as sb:
+            # Also covers ArchetypeBlocked (Tier-3) and ScriptReviewRequired
+            # (Tier-2 awaiting human sign-off): a clean stop, not a failure.
+            logger.info(f"[Pipeline] Halted for {project_id}: {sb}")
         except Exception as e:
             logger.error(f"[Pipeline] Fatal error: {e}", exc_info=True)
             self._emit_progress(
@@ -3527,4 +4100,19 @@ class SafetyBlocked(Exception):
     """The universal YT-safety gate did not pass for this project. GPU
     generation is refused until the script/lyrics are revised (or a human
     records an override via /safety-override)."""
+    pass
+
+
+class ArchetypeBlocked(SafetyBlocked):
+    """The project's Content Archetype is disabled / Tier-3 (do-not-automate):
+    the niche relies on real footage, physics, copyrighted IP, or human
+    authenticity local AI cannot fake. Subclasses SafetyBlocked so every
+    `except SafetyBlocked` handler stops the run cleanly instead of failing."""
+    pass
+
+
+class ScriptReviewRequired(SafetyBlocked):
+    """The archetype requires human script review (Tier-2). Generation waits
+    until a human approves via /approve-script (sets project.reviewed=1).
+    Subclasses SafetyBlocked so the full-auto chains halt gracefully."""
     pass

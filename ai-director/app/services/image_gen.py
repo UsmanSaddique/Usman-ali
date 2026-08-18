@@ -56,14 +56,27 @@ class ImageGenService:
             gen_w = int(round((gen_h * aspect) / 16) * 16)
             logger.info(f"[ImageGen] still upsized {width}x{height} -> {gen_w}x{gen_h} for Z-Image quality")
 
+        # Append the compulsory quality/style suffix so every still lands the
+        # target children's-3D finish, whatever the director LLM authored.
+        final_prompt = prompt
+        suffix = (getattr(ic, "quality_suffix", "") or "").strip()
+        if suffix and suffix.lower() not in prompt.lower():
+            final_prompt = f"{prompt.rstrip().rstrip(',')}, {suffix}"
+
+        hires = bool(getattr(ic, "zimage_hires", False))
+        hires_scale = float(getattr(ic, "zimage_hires_scale", 1.4))
         wf = build_zimage_workflow(
-            prompt=prompt,
+            prompt=final_prompt,
             width=gen_w,
             height=gen_h,
             steps=steps or int(getattr(ic, "zimage_steps", 9)),
             cfg=1.0,
             seed=seed,
             shift=float(getattr(ic, "zimage_shift", 3.0)),
+            hires=hires,
+            hires_scale=hires_scale,
+            hires_denoise=float(getattr(ic, "zimage_hires_denoise", 0.4)),
+            hires_steps=int(getattr(ic, "zimage_hires_steps", 0)),
         )
         if not output_path:
             output_path = str(self.config.paths.assets_dir / "images" / f"img_{seed}.png")
@@ -74,10 +87,15 @@ class ImageGenService:
         history = client.wait_for_completion(prompt_id, timeout=600, poll=1.5)
         final = client.collect_output(history, output_path)
         elapsed = time.time() - t0
-        logger.info(f"[ImageGen] Z-Image {gen_w}x{gen_h} in {elapsed:.1f}s -> {final}")
+        out_w = int(round(gen_w * hires_scale)) if hires else gen_w
+        out_h = int(round(gen_h * hires_scale)) if hires else gen_h
+        logger.info(
+            f"[ImageGen] Z-Image {gen_w}x{gen_h}"
+            f"{f' -> hires {out_w}x{out_h}' if hires else ''} in {elapsed:.1f}s -> {final}"
+        )
         return ImageResult(
-            path=final, width=gen_w, height=gen_h, seed=seed,
-            generation_time=elapsed, prompt_used=prompt,
+            path=final, width=out_w, height=out_h, seed=seed,
+            generation_time=elapsed, prompt_used=final_prompt,
         )
 
     def _generate_comfyui(

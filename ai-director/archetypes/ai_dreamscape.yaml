@@ -1,0 +1,20 @@
+id: ai_dreamscape
+tier: 1
+label: "AI Dreamscape / Satisfying surreal"
+enabled: true
+
+# Music/soundscape bed only — NO voice. Surreal looping visuals; consistency
+# does not matter (the surrealism IS the product). Needs the ambient audio
+# branch (Phase 3) and the ltx_director engine for native motion.
+audio_mode: ambient
+video_engine: ltx_director
+visual_mode: surreal_loop
+character_consistency: false
+scene_planner: freeform
+source: llm
+
+hitl:
+  script_review: optional
+  safety_gate: standard
+
+seo_profile: ambient

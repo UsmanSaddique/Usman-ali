@@ -1,5 +1,6 @@
 name: "Gullu Ka Gaon"
 slug: "gullu-ka-gaon"
+content_archetype: "kids_poem"   # song lane, character consistency, Tier-1 (behavior-neutral)
 language: "Roman Urdu"   # narration/titles in Latin-script Urdu; visual prompts always English
 made_for_kids: true
 target_audience: "Kids 4-10 + families, Urdu/Hindi speaking (South Asia + diaspora) — comedy-first, watch-together content"

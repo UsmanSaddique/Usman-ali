@@ -1,0 +1,301 @@
+{
+  "samples": [
+    {
+      "id": "kids_poem",
+      "label": "Kids Poem / Animal Story (song)",
+      "tier": 1,
+      "idea": "An animal poem: a baby duckling learning to splash and quack",
+      "routing": {
+        "audio_mode": "song",
+        "video_engine": "clips",
+        "visual_mode": "character_panels",
+        "source": "llm",
+        "character_consistency": true,
+        "scene_planner": "lyric_scenes"
+      },
+      "gates": {
+        "script_review": "optional",
+        "safety_gate": "standard",
+        "is_blocked": false,
+        "runtime": {
+          "verdict": "pass (rules)",
+          "ip_block": []
+        }
+      },
+      "storyboard": [
+        {
+          "n": 1,
+          "prompt": "wide establishing shot, a chubby fluffy yellow baby duckling, oversized round head, tiny orange beak sitting under a large tree in a serene cozy sunlit room with arched windows and cushions, dappled sunlight, gentle natural movement, soft b",
+          "motion": "static"
+        },
+        {
+          "n": 2,
+          "prompt": "hero low-angle medium shot, a chubby fluffy yellow baby duckling, oversized round head, tiny orange beak joyfully singing with arms raised in a bright quiet library corner with wooden shelves and golden light, sparkles floating, the charact",
+          "motion": "zoom_in"
+        },
+        {
+          "n": 3,
+          "prompt": "fading wide twilight shot, a chubby fluffy yellow baby duckling, oversized round head, tiny orange beak walking hand in hand with a friend in a peaceful cozy sunlit room with arched windows and cushions, subtle camera push-in, warm light sh",
+          "motion": "pan_left"
+        }
+      ],
+      "extra": {}
+    },
+    {
+      "id": "ai_dreamscape",
+      "label": "AI Dreamscape / Satisfying surreal",
+      "tier": 1,
+      "idea": "Satisfying surreal dreamscape loops set to an ambient bed",
+      "routing": {
+        "audio_mode": "ambient",
+        "video_engine": "ltx_director",
+        "visual_mode": "surreal_loop",
+        "source": "llm",
+        "character_consistency": false,
+        "scene_planner": "freeform"
+      },
+      "gates": {
+        "script_review": "optional",
+        "safety_gate": "standard",
+        "is_blocked": false,
+        "runtime": {
+          "verdict": "pass (rules)",
+          "ip_block": []
+        }
+      },
+      "storyboard": [
+        {
+          "n": 1,
+          "prompt": "an endless ocean made of liquid mercury under three purple moons, surreal dreamscape, impossible physics, iridescent, hyper-detailed, cinematic volumetric light, cinematic, highly detailed, volumetric lighting, depth of field, film grain, p",
+          "duration": "6.0s (fixed loop)",
+          "narration": "(none — ambient bed)"
+        },
+        {
+          "n": 2,
+          "prompt": "a glass whale drifting through a sky of floating candle flames, surreal dreamscape, impossible physics, iridescent, hyper-detailed, cinematic volumetric light, cinematic, highly detailed, volumetric lighting, depth of field, film grain, pro",
+          "duration": "6.0s (fixed loop)",
+          "narration": "(none — ambient bed)"
+        },
+        {
+          "n": 3,
+          "prompt": "crystalline flowers blooming in reverse into geometric fractals, surreal dreamscape, impossible physics, iridescent, hyper-detailed, cinematic volumetric light, cinematic, highly detailed, volumetric lighting, depth of field, film grain, pr",
+          "duration": "6.0s (fixed loop)",
+          "narration": "(none — ambient bed)"
+        },
+        {
+          "n": 4,
+          "prompt": "a city of soft clouds folding into origami skyscrapers, surreal dreamscape, impossible physics, iridescent, hyper-detailed, cinematic volumetric light, cinematic, highly detailed, volumetric lighting, depth of field, film grain, professiona",
+          "duration": "6.0s (fixed loop)",
+          "narration": "(none — ambient bed)"
+        },
+        {
+          "n": 5,
+          "prompt": "rivers of light pouring upward into a mirrored infinity, surreal dreamscape, impossible physics, iridescent, hyper-detailed, cinematic volumetric light, cinematic, highly detailed, volumetric lighting, depth of field, film grain, profession",
+          "duration": "6.0s (fixed loop)",
+          "narration": "(none — ambient bed)"
+        }
+      ],
+      "extra": {
+        "music_style": "dreamy ambient soundscape, slow synth pads, no drums, no vocals, instrumental",
+        "note": "no voice at all — music bed is the master audio"
+      }
+    },
+    {
+      "id": "funny_ai_qa",
+      "label": "Asking AI / Funny AI Q&A",
+      "tier": 1,
+      "idea": "Asking an AI ridiculous questions; it answers absurdly",
+      "routing": {
+        "audio_mode": "narration",
+        "video_engine": "clips",
+        "visual_mode": "surreal_loop",
+        "source": "llm",
+        "character_consistency": false,
+        "scene_planner": "qa_pairs"
+      },
+      "gates": {
+        "script_review": "optional",
+        "safety_gate": "standard",
+        "is_blocked": false,
+        "runtime": {
+          "verdict": "pass (rules)",
+          "ip_block": []
+        }
+      },
+      "storyboard": [
+        {
+          "n": 1,
+          "prompt": "a giant microwave containing an entire glowing ocean, fish in sunglasses, surreal, glitchy, dreamlike, impossible, comedic, cinematic, highly detailed, volumetric lighting, depth of field, film grain, professional color grade",
+          "narration": "What happens if you microwave the ocean?"
+        },
+        {
+          "n": 2,
+          "prompt": "the moon slurping ocean-soup through a bendy straw the size of a mountain, surreal, glitchy, dreamlike, impossible, comedic, cinematic, highly detailed, volumetric lighting, depth of field, film grain, professional color grade",
+          "narration": "The AI says: it becomes soup for the moon."
+        },
+        {
+          "n": 3,
+          "prompt": "a boardroom of penguins buried in glowing spreadsheets made of ice, surreal, glitchy, dreamlike, impossible, comedic, cinematic, highly detailed, volumetric lighting, depth of field, film grain, professional color grade",
+          "narration": "Can penguins do taxes?"
+        }
+      ],
+      "extra": {
+        "planner_directive": "qa_pairs — Q&A beats + deliberately surreal visuals"
+      }
+    },
+    {
+      "id": "reddit_story",
+      "label": "Reddit Stories",
+      "tier": 1,
+      "idea": "A scraped Reddit thread retold as narration over a looping background",
+      "routing": {
+        "audio_mode": "narration",
+        "video_engine": "clips",
+        "visual_mode": "reddit_broll",
+        "source": "scrape",
+        "character_consistency": false,
+        "scene_planner": "narration_scenes"
+      },
+      "gates": {
+        "script_review": "optional",
+        "safety_gate": "standard",
+        "is_blocked": false,
+        "runtime": {
+          "verdict": "pass (rules)",
+          "ip_block": []
+        }
+      },
+      "storyboard": [
+        {
+          "n": 1,
+          "prompt": "a cozy dim office at dusk, warm lamp glow, calm drifting dust motes, soft cinematic ambient background, calm muted colors, slow drifting motion, cinematic documentary photography, dramatic natural light, atmospheric haze, shallow depth of f",
+          "narration": "So this happened to me last Tuesday at the office..."
+        },
+        {
+          "n": 2,
+          "prompt": "abstract cascade of soft glowing envelopes drifting endlessly, soft cinematic ambient background, calm muted colors, slow drifting motion, cinematic documentary photography, dramatic natural light, atmospheric haze, shallow depth of field, ",
+          "narration": "I hit reply-all to four hundred people by accident."
+        },
+        {
+          "n": 3,
+          "prompt": "a quiet rain-streaked window, soft bokeh city lights beyond, soft cinematic ambient background, calm muted colors, slow drifting motion, cinematic documentary photography, dramatic natural light, atmospheric haze, shallow depth of field, fi",
+          "narration": "What happened next changed my whole week."
+        }
+      ],
+      "extra": {
+        "source": "r/tifu (public JSON, SFW only, no login)",
+        "visual_mode": "reddit_broll — one looping bg clip under the whole voiceover"
+      }
+    },
+    {
+      "id": "edu_facts",
+      "label": "Facts / Health / Baby-diet (educational)",
+      "tier": 2,
+      "idea": "Baby-development facts (health) — must be human-verified first",
+      "routing": {
+        "audio_mode": "narration",
+        "video_engine": "clips",
+        "visual_mode": "voice_over_bg",
+        "source": "llm",
+        "character_consistency": false,
+        "scene_planner": "narration_scenes"
+      },
+      "gates": {
+        "script_review": "required",
+        "safety_gate": "strict",
+        "is_blocked": false,
+        "runtime": {
+          "verdict": "pass (rules)",
+          "ip_block": []
+        }
+      },
+      "storyboard": [
+        {
+          "n": 1,
+          "prompt": "macro cinematic shot of a cherry and an egg side by side on soft linen, warm light, clean documentary, dramatic natural light, atmospheric, cinematic, cinematic documentary photography, dramatic natural light, atmospheric haze, shallow dept",
+          "narration": "In its first month, a baby's stomach grows from the size of a cherry to an egg."
+        },
+        {
+          "n": 2,
+          "prompt": "soft-focus close-up of a gentle face at arm's length, dreamy shallow depth, clean documentary, dramatic natural light, atmospheric, cinematic, cinematic documentary photography, dramatic natural light, atmospheric haze, shallow depth of fie",
+          "narration": "Newborns can only see about 8 to 12 inches in front of them."
+        },
+        {
+          "n": 3,
+          "prompt": "warm intimate nursery scene, golden hour glow, tender atmosphere, clean documentary, dramatic natural light, atmospheric, cinematic, cinematic documentary photography, dramatic natural light, atmospheric haze, shallow depth of field, film g",
+          "narration": "A baby's sense of smell guides them to their mother within days."
+        }
+      ],
+      "extra": {
+        "gate_note": "Tier-2: pipeline HARD-STOPS after script for human fact-check (POST /approve-script)"
+      }
+    },
+    {
+      "id": "faith_kids",
+      "label": "Faith / Cultural kids content",
+      "tier": 2,
+      "idea": "Wholesome faith/values song for kids (strict gate + IP protection)",
+      "routing": {
+        "audio_mode": "song",
+        "video_engine": "clips",
+        "visual_mode": "character_panels",
+        "source": "llm",
+        "character_consistency": true,
+        "scene_planner": "lyric_scenes"
+      },
+      "gates": {
+        "script_review": "required",
+        "safety_gate": "strict",
+        "is_blocked": false,
+        "runtime": {
+          "verdict": "BLOCK (copyright)",
+          "ip_block": [
+            "Copyrighted IP 'bheem' found in title.",
+            "Copyrighted IP 'chhota bheem' found in title."
+          ]
+        }
+      },
+      "storyboard": [
+        {
+          "n": 1,
+          "prompt": "wide master shot, a kind cartoon child in modest colorful clothes sharing food with friends in a cheerful ancient stone pathway lined with lanterns and greenery, warm smiles, gentle natural movement, soft breeze in clothing and hair, warm 3",
+          "motion": "static"
+        },
+        {
+          "n": 2,
+          "prompt": "dynamic medium close-up, a kind cartoon child in modest colorful clothes dancing gently in a beautiful peaceful riverbank with stepping stones and willow trees, soft particles floating around, the character moving with lively gentle motion,",
+          "motion": "zoom_in"
+        }
+      ],
+      "extra": {
+        "gate_note": "Tier-2: required human review + strict gate + copyrighted-IP deny-list"
+      }
+    },
+    {
+      "id": "authenticity_trap",
+      "label": "Authenticity Trap (DO NOT AUTOMATE)",
+      "tier": 3,
+      "idea": "Satisfying real pets / luxury cars / sports moments / ASMR — DO NOT AUTOMATE",
+      "routing": {
+        "audio_mode": "narration",
+        "video_engine": "clips",
+        "visual_mode": "voice_over_bg",
+        "source": "llm",
+        "character_consistency": false,
+        "scene_planner": "narration_scenes"
+      },
+      "gates": {
+        "script_review": "blocked",
+        "safety_gate": "blocked",
+        "is_blocked": true,
+        "runtime": {
+          "verdict": "REFUSED at start-generation"
+        }
+      },
+      "storyboard": [],
+      "extra": {
+        "refusal": "Archetype 'authenticity_trap' (Authenticity Trap (DO NOT AUTOMATE)) is not automatable: this niche relies on real-world footage, exact physics, copyrighted material, or human authenticity that local AI generation cannot produce credibly. Enable it only with explicit human production."
+      }
+    }
+  ]
+}

@@ -16,6 +16,17 @@ public static class SystemEndpoints
             return Results.Ok(channels.Select(ChannelSummary.From));
         });
 
+        // Content Archetypes for the wizard — shape matches app/main.py::list_archetypes.
+        app.MapGet("/api/archetypes", (AiDirector.Application.Archetypes.ArchetypeResolver resolver) =>
+            Results.Ok(resolver.Describe().Select(r => new
+            {
+                id = r.ArchetypeId, label = r.Label, tier = r.Tier, enabled = r.Enabled,
+                audio_mode = r.AudioMode, video_engine = r.VideoEngine,
+                visual_mode = r.VisualMode, source = r.Source,
+                script_review = r.ScriptReview, safety_gate = r.SafetyGate,
+                is_blocked = r.IsBlocked,
+            })));
+
         app.MapGet("/api/system/health", () => Results.Ok(new { status = "ok" }));
 
         // Shape must match app/main.py::engine_status — the frontend reads

@@ -361,10 +361,35 @@ verdict=pass when there are no block/high issues. rewrites: give a drop-in repla
 
     # ── Orchestration ──────────────────────────────────────────────────
 
+    def _scan_ip_denylist(self, fields: dict, denylist: Optional[list]) -> list:
+        """Block-severity issue per archetype IP deny-list hit (word-boundary,
+        case-insensitive). Copyrighted characters/brands = monetization risk."""
+        if not denylist:
+            return []
+        issues = []
+        for term in denylist:
+            term = (term or "").strip()
+            if not term:
+                continue
+            pat = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
+            for where, text in fields.items():
+                if text and pat.search(text):
+                    issues.append(SafetyIssue(
+                        severity="block", category="copyright",
+                        where=where,
+                        detail=f"Copyrighted IP '{term}' found in {where}.",
+                        suggestion=f"Remove '{term}' and use an original character/name."))
+                    break  # one issue per term is enough
+        return issues
+
     def run_gate(self, project_id: str, use_llm: bool = True,
-                 auto_revise: bool = True, unload_after: bool = True) -> "GateResult":
+                 auto_revise: bool = True, unload_after: bool = True,
+                 ip_denylist: Optional[list] = None) -> "GateResult":
         """Full gate: collect → rules → (LLM critic) → auto-revise → re-run rules
-        → persist SafetyReport. Returns the GateResult."""
+        → persist SafetyReport. Returns the GateResult.
+
+        `ip_denylist`: extra copyrighted-IP terms (from the project's archetype,
+        e.g. "bheem") that force a BLOCK verdict when found — monetization risk."""
         from app.database import (get_session, Project, Scene, SafetyReport,
                                   SafetyVerdict)
         session = get_session()
@@ -378,6 +403,7 @@ verdict=pass when there are no block/high issues. rewrites: give a drop-in repla
 
             fields = self._collect(project, scenes)
             rule_issues = self.run_rules(project, fields)
+            rule_issues += self._scan_ip_denylist(fields, ip_denylist)
             llm_issues: list[SafetyIssue] = []
             llm_used = False
             revisions: list[dict] = []

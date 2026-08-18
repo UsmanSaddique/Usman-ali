@@ -1,0 +1,77 @@
+name: "ASMR Cake"
+slug: "asmr-cake"
+content_archetype: "asmr_ambient"   # ambient (no voice), satisfying loop, Tier-1
+orientation: "vertical"             # 9:16 Shorts / Reels / TikTok
+language: "English"                 # visual prompts always English; there is no spoken audio
+made_for_kids: false
+target_audience: "Shorts/Reels/TikTok scrollers who love the 'Is It Cake?' reveal — hyper-real cake replicas cut open to satisfying interiors"
+vibe: "Jaw-dropping and satisfying — everyday objects that turn out to be CAKE. Two look-alikes, one knife, one perfect slice, one 'no way that's cake!' reveal of moist sponge and cream."
+niche: "IS IT CAKE? — hyper-realistic cake illusions. Every scene shows two near-identical objects (one real, one a cake replica); a knife slices one and the interior reveals it was cake all along. Search identity: 'is it cake', 'realistic cake', 'cake or not', 'satisfying cake cut', 'cake illusion asmr'."
+
+# ── Format ───────────────────────────────────────────────────────────────────
+format: "Ambient-mode IS-IT-CAKE loop, 15-45s vertical Short. No narration, no lyrics — a soft ASMR bed plus a crisp knife-slice sound at each reveal. Each scene: two identical-looking objects, then a slow satisfying knife cut reveals one is cake."
+episode_structure:
+  - "HOOK (0-2s): two identical everyday objects sit side by side on a clean studio surface — e.g. two shiny red apples, two bars of soap, two potted cacti. They look 100% real. Question implied: which one is cake?"
+  - "SLICE: a sharp knife blade slowly presses into ONE object; the surface gives like soft sponge (not the crunch of the real thing)"
+  - "REVEAL: the cut opens to show unmistakable CAKE inside — moist coloured sponge layers, glossy buttercream, filling — while the object's realistic outer shell stays perfectly disguised"
+  - "SATISFY: a clean slice falls away, interior glistening; slow push-in on the reveal. Optionally the OTHER twin is tapped to show it was the real one"
+  - "LOOP CLOSE: end framing echoes the opening two-object shot so the Short loops"
+
+# ── Visual identity ───────────────────────────────────────────────────────────
+art_style_phrase: "hyper-realistic macro food photography, studio product lighting, shallow depth of field, ultra-detailed textures, photoreal everyday objects that are secretly cake, glossy moist cake interior with visible sponge layers and buttercream, 9:16 vertical framing, subject large and centered"
+color_palette: "clean bright studio background, true-to-life object colors on the outside, warm vivid cake tones on the inside — golden sponge, cream, jam-red and chocolate-brown fillings for a satisfying contrast at the reveal"
+visual_style:
+  - "TWO near-identical objects in the establishing frame — the whole gag is that you cannot tell which is real and which is cake"
+  - "The knife enters SLOWLY and cleanly; the cut surface behaves like soft cake (compresses, moist crumb), never a hard/real texture"
+  - "The REVEAL is the payoff — interior must read instantly as cake: layered sponge, glossy cream, filling oozing slightly"
+  - "Macro and close; glossy specular highlights on the knife and on wet cake interior; clean uncluttered studio backdrop"
+  - "Realistic outer shell + cake interior in the SAME object = the satisfying contradiction"
+negative_prompt_additions: "cartoon, illustration, low detail, obvious fake, plastic look, messy, gore, blood, real fingers in detail, deformed hands, extra fingers, human face, text, letters, logo, watermark, blurry, low quality, harsh flat lighting, cluttered background, fast motion, jerky movement, flickering"
+still_ratio: 0.0
+scene_type_directive: "Use scene_type 'img2vid' for EVERY scene. The STILL shows two identical-looking objects (or a knife poised on one); the MOTION is a slow, clean knife slice pressing through and the interior opening to reveal moist cake. Motion is always SLOW and satisfying — the reveal is the moment."
+# ── MOTION directive (video prompt — authored SEPARATELY from the still) ──────
+# The still sets up the two look-alike objects; THIS describes what moves over
+# the ~10s clip, so the video model animates the reveal instead of re-reading
+# the still's composition.
+motion_directive: "a sharp knife blade slowly and cleanly presses down into one of the objects; the surface gives like soft sponge and the object splits open to reveal it was CAKE all along — moist coloured sponge layers and glossy buttercream inside; a clean slice gently falls away, the cut face glistening; slow, smooth, deeply satisfying motion, macro, the reveal is the moment"
+
+# ── Visual direction: the 'Is It Cake?' mandate ───────────────────────────────
+visual_direction:
+  - "EVERY scene is built on the illusion: TWO objects that look almost the same, ONE of them is a hyper-realistic CAKE. The satisfaction is the reveal that a totally ordinary-looking thing is actually cake."
+  - "A knife IS the hero prop. The cut is slow, clean and satisfying, and it opens to unmistakable cake — moist coloured sponge, buttercream, filling. Show the realistic outer 'skin' peeling back to cake."
+  - "Keep the outside photoreal and mundane (fruit, veg, soap, a shoe, a plant, a candle, a soda can) and the inside gloriously cake. The bigger the gap between 'looks real' and 'is cake', the better."
+  - "Minimise human hands — show mostly the knife blade and the objects; if a hand appears keep it small, clean and out of close focus (AI mangles detailed fingers). Never a face."
+  - "NO on-screen text, NO people talking. The visual reveal + the ASMR slice sound carry it. Composed VERTICAL 9:16, subject centered and large."
+  - "Vary the object every scene (apple, egg, bar of soap, rubber duck, cactus, chili, croissant, lipstick) but keep the glossy hyper-real macro style identical."
+
+content_rules:
+  - "Zero spoken words and zero on-screen text — soundscape + the slice/reveal carry it"
+  - "Each scene must land ONE clean reveal and be loop-friendly"
+  - "The interior must always read clearly as cake at the reveal (moist crumb + cream), never ambiguous"
+
+# ── Audio (ambient mode — soundscape/music bed, NO vocals, NO TTS) ────────────
+music:
+  style: "calm satisfying ASMR ambient bed, soft lo-fi chillhop, gentle mellow keys, warm vinyl texture, soft tape hiss, slow relaxed groove, no vocals, no lyrics, soothing background, cozy studio mood, instrumental, 70 bpm"
+
+# ── Titles & SEO ──────────────────────────────────────────────────────────────
+title_formulas:
+  - "'Is It Cake?! 🍰🔪 {object} Edition | Satisfying Cake Reveal #shorts #isitcake #cake'"
+  - "'You Won't Believe This {object} Is CAKE 😱 | Satisfying ASMR Slice #shorts #satisfying'"
+seo_themes:
+  - "is it cake, realistic cake, cake illusion, satisfying cake cut, cake or not, hyperrealistic cake, cake asmr, satisfying video, shorts, reels, oddly satisfying"
+
+# ── Local-AI generation presets (16GB-safe, vertical) ─────────────────────────
+generation:
+  target_resolution: "1080p"   # vertical -> 1080x1920 final (resolved by orientation)
+  clip_seconds: [4, 5]         # let the slice + reveal breathe
+  prefer: "img2vid for every scene; lock seed per project"
+  video_model: "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+  default_loras: []
+
+avoid:
+  - "obvious/fake or plastic-looking cake (kills the illusion)"
+  - "detailed human hands or fingers, and any human face"
+  - "text or logos rendered inside the frame"
+  - "gore, blood, or anything unappetising at the reveal"
+  - "fast or jerky motion (the slice must be slow and satisfying)"
+  - "an ambiguous interior — the reveal must clearly be cake"

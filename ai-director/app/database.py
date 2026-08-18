@@ -91,6 +91,8 @@ class Channel(Base):
     still_ratio = Column(Float, default=0.4)
     target_resolution = Column(String, default="1080p")
     made_for_kids = Column(Boolean, default=False)
+    content_archetype = Column(String, nullable=True)  # archetype id (archetypes/*.yaml); NULL=legacy
+    orientation = Column(String, default="landscape")  # landscape(16:9) | vertical(9:16 shorts/reels) | square(1:1)
     default_video_model = Column(String, default="ltx-2.3")
     default_image_model = Column(String, default="sdxl")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -111,7 +113,10 @@ class Project(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     title = Column(String, nullable=False)
     channel_id = Column(String, ForeignKey("channels.id"), nullable=False)
-    project_type = Column(String, default="song")   # "song" | "narration"
+    project_type = Column(String, default="song")   # "song" | "narration" (internal lane; chosen by archetype)
+    content_archetype = Column(String, nullable=True)  # archetype id override; NULL=inherit channel
+    orientation = Column(String, nullable=True)  # override channel orientation; NULL=inherit (landscape|vertical|square)
+    reviewed = Column(Boolean, default=False)  # human script sign-off (Tier-2 required-review gate); only the approve endpoint sets it
     duration_target = Column(Integer, nullable=False)  # seconds
     context = Column(Text)              # user-provided context/notes
     narration_script = Column(Text)     # narration mode: JSON {chapters:[{beats:[...]}], seo:{...}}
@@ -155,7 +160,8 @@ class Scene(Base):
     project_id = Column(String, ForeignKey("projects.id"), nullable=False)
     scene_number = Column(Integer, nullable=False)
     scene_type = Column(SAEnum(SceneType), nullable=False)
-    prompt = Column(Text, nullable=False)
+    prompt = Column(Text, nullable=False)        # IMAGE prompt: the opening-frame composition (still gen)
+    motion_prompt = Column(Text, nullable=True)  # VIDEO prompt: what MOVES/happens over the clip (authored, distinct from the still)
     negative_prompt = Column(Text, default="")
     duration = Column(Float, default=5.0)       # seconds
     camera_motion = Column(String, default="static")
@@ -335,7 +341,13 @@ def _migrate(engine):
             ("projects", "narration_script", "TEXT", "NULL"),
             ("projects", "narration_voice", "VARCHAR", "NULL"),
             ("projects", "narration_audio_path", "VARCHAR", "NULL"),
+            ("projects", "content_archetype", "VARCHAR", "NULL"),
+            ("projects", "orientation", "VARCHAR", "NULL"),
+            ("projects", "reviewed", "BOOLEAN", "0"),
+            ("channels", "content_archetype", "VARCHAR", "NULL"),
+            ("channels", "orientation", "VARCHAR", "'landscape'"),
             ("scenes", "video_model", "VARCHAR", "NULL"),
+            ("scenes", "motion_prompt", "TEXT", "NULL"),
             ("scenes", "narration_start", "FLOAT", "NULL"),
             ("scenes", "narration_end", "FLOAT", "NULL"),
             ("scenes", "visual_type", "VARCHAR", "NULL"),

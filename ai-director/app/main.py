@@ -142,6 +142,7 @@ async def lifespan(app: FastAPI):
     pipeline.on_progress(broadcast_progress_sync)
     logger.info("AI Director started")
     _seed_default_channel()
+    _sync_channels_from_yaml()
     if interrupted:
         if settings.auto_resume:
             logger.info(f"[AutoResume] {len(interrupted)} interrupted project(s) "
@@ -288,6 +289,8 @@ class CreateProjectReq(BaseModel):
     video_engine: Optional[str] = None    # "clips" (default) | "ltx_director"
     project_type: Optional[str] = None    # "song" (default) | "narration"
     narration_voice: Optional[str] = None # kokoro voice id, e.g. "am_michael"
+    content_archetype: Optional[str] = None  # archetype id override; NULL=inherit channel
+    orientation: Optional[str] = None     # landscape | vertical(shorts/reels) | square; NULL=inherit channel
 
 
 class MusicGenReq(BaseModel):
@@ -317,6 +320,8 @@ class UpdateProjectReq(BaseModel):
     num_scenes: Optional[int] = None
     video_engine: Optional[str] = None  # "clips" | "ltx_director"
     lyrics_urdu: Optional[str] = None   # settable any time — used at render for the 2nd version
+    orientation: Optional[str] = None   # landscape | vertical(shorts/reels) | square
+    content_archetype: Optional[str] = None
 
 class GenerateScenesReq(BaseModel):
     scene_ids: list[str]
@@ -352,6 +357,8 @@ class CreateChannelReq(BaseModel):
     still_ratio: float = 0.4
     target_resolution: str = "1080p"
     made_for_kids: bool = False
+    content_archetype: Optional[str] = None
+    orientation: str = "landscape"   # landscape | vertical(shorts/reels) | square
 
 class RegisterLoRAReq(BaseModel):
     name: str
@@ -363,6 +370,42 @@ class RegisterLoRAReq(BaseModel):
 
 
 # ── Project Endpoints ──────────────────────────────────────────────────────
+
+def _normalize_orientation(value):
+    """Canonicalize a wizard-supplied orientation ('shorts'/'reel'/'vertical'
+    → 'vertical', etc). Returns None when unset so the project inherits its
+    channel's orientation via the archetype resolver."""
+    if not value:
+        return None
+    from app.services import orientation as _orient
+    return _orient.normalize(value)
+
+
+def _orientation_info(project) -> dict:
+    """Resolved orientation + concrete render sizes for a project, so the UI
+    can show '9:16 shorts — clips 480x832, final 1080x1920'."""
+    from app.services import orientation as _orient
+    from app.services import archetypes as _A
+    try:
+        channel = project.channel
+        profile = None
+        try:
+            profile = pipeline.director.load_channel_profile(channel.slug) if channel else None
+        except Exception:
+            profile = None
+        recipe = _A.resolve(project, channel, profile)
+        o = _orient.normalize(recipe.orientation)
+        res = channel.target_resolution if channel else "1080p"
+        bw, bh = _orient.base_dims(o)
+        tw, th = _orient.target_dims(o, res)
+        return {
+            "orientation": o,
+            "is_vertical": _orient.is_vertical(o),
+            "render_dims": {"clip": [bw, bh], "final": [tw, th], "resolution": res},
+        }
+    except Exception:
+        return {"orientation": "landscape", "is_vertical": False, "render_dims": None}
+
 
 @app.post("/api/projects")
 def create_project(req: CreateProjectReq, db: Session = Depends(get_db)):
@@ -387,6 +430,8 @@ def create_project(req: CreateProjectReq, db: Session = Depends(get_db)):
         video_engine=req.video_engine if req.video_engine in ("clips", "ltx_director") else "clips",
         project_type=req.project_type or "song",
         narration_voice=req.narration_voice,
+        content_archetype=req.content_archetype,
+        orientation=_normalize_orientation(req.orientation),
     )
     db.add(project)
     db.commit()
@@ -512,6 +557,8 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
         "music_model": project.music_model,
         "upscale_inline": project.upscale_inline,
         "video_engine": getattr(project, "video_engine", None) or "clips",
+        "content_archetype": getattr(project, "content_archetype", None),
+        **_orientation_info(project),
         "music": music_info,
         "music_variants": music_variants,
         "total_scenes": project.total_scenes,
@@ -555,6 +602,16 @@ def update_project(project_id: str, req: UpdateProjectReq, db: Session = Depends
     if req.lyrics_urdu is not None:
         project.lyrics_urdu = req.lyrics_urdu
 
+    # Orientation / archetype only shape the NEXT run — block only mid-render.
+    if req.orientation is not None or req.content_archetype is not None:
+        if project.status in [ProjectStatus.GENERATING, ProjectStatus.UPSCALING,
+                              ProjectStatus.ASSEMBLING]:
+            raise HTTPException(400, "Cannot change orientation/archetype while the pipeline is running")
+        if req.orientation is not None:
+            project.orientation = _normalize_orientation(req.orientation)
+        if req.content_archetype is not None:
+            project.content_archetype = req.content_archetype or None
+
     script_fields = (req.title, req.duration, req.num_scenes, req.context)
     if any(v is not None for v in script_fields) and \
             project.status not in [ProjectStatus.DRAFT, ProjectStatus.SCRIPTED]:
@@ -578,6 +635,7 @@ def update_project(project_id: str, req: UpdateProjectReq, db: Session = Depends
         "num_scenes_target": project.num_scenes_target,
         "context": project.context,
         "video_engine": project.video_engine,
+        **_orientation_info(project),
     }
 
 
@@ -669,9 +727,14 @@ def approve_script(project_id: str, db: Session = Depends(get_db)):
         if s.status == SceneStatus.PENDING:
             pass  # keep pending for generation
     project.status = ProjectStatus.APPROVED
+    # Human script sign-off — clears the Tier-2 required-review gate. Only this
+    # endpoint sets `reviewed`; the pipeline never does. (Column is additive;
+    # older DBs get it via _migrate.)
+    if hasattr(project, "reviewed"):
+        project.reviewed = True
     db.commit()
 
-    return {"status": "approved", "scene_count": len(scenes)}
+    return {"status": "approved", "scene_count": len(scenes), "reviewed": True}
 
 
 def _reject_if_safety_blocked(db: Session, project_id: str):
@@ -1475,13 +1538,36 @@ def select_version(scene_id: str, generation_id: str, db: Session = Depends(get_
 
 # ── Channel & LoRA Endpoints ──────────────────────────────────────────────
 
+@app.get("/api/archetypes")
+def list_archetypes():
+    """Content Archetypes (archetypes/*.yaml) for the wizard: id, label, tier,
+    audio/visual wiring, and the HITL gate policy so the UI can warn when human
+    review is required or when a niche is do-not-automate (Tier 3)."""
+    from app.services import archetypes as _A
+    out = []
+    for aid, raw in _A.load_archetypes(force=True).items():
+        r = _A._coerce_recipe(raw, _A._norm_orient(raw.get("orientation")) or "landscape")
+        out.append({
+            "id": aid, "label": r.label, "tier": r.tier, "enabled": r.enabled,
+            "audio_mode": r.audio_mode, "video_engine": r.video_engine,
+            "orientation": r.orientation,
+            "visual_mode": r.visual_mode, "source": r.source,
+            "script_review": r.script_review, "safety_gate": r.safety_gate,
+            "is_blocked": r.is_blocked,
+        })
+    out.sort(key=lambda x: (x["tier"], x["id"]))
+    return out
+
+
 @app.get("/api/channels")
 def list_channels(db: Session = Depends(get_db)):
     channels = db.query(Channel).all()
     return [
         {"id": c.id, "name": c.name, "slug": c.slug,
          "still_ratio": c.still_ratio, "resolution": c.target_resolution,
-         "made_for_kids": c.made_for_kids}
+         "made_for_kids": c.made_for_kids,
+         "content_archetype": getattr(c, "content_archetype", None),
+         "orientation": getattr(c, "orientation", None) or "landscape"}
         for c in channels
     ]
 
@@ -1495,6 +1581,8 @@ def create_channel(req: CreateChannelReq, db: Session = Depends(get_db)):
         still_ratio=req.still_ratio,
         target_resolution=req.target_resolution,
         made_for_kids=req.made_for_kids,
+        content_archetype=req.content_archetype,
+        orientation=_normalize_orientation(req.orientation) or "landscape",
     )
     db.add(channel)
     db.commit()
@@ -1685,6 +1773,62 @@ def _seed_default_channel():
         session.commit()
         logger.info("Seeded default channel: Little Fairy Dreams")
     session.close()
+
+
+def _sync_channels_from_yaml():
+    """Ensure every channels/*.yaml has a Channel DB row.
+
+    Creates a row for any YAML profile that lacks one (so a new channel like
+    asmr-cake is usable the moment its YAML exists), and non-destructively
+    backfills content_archetype / orientation onto existing rows when the DB
+    value is still empty. Never overwrites hand-tuned DB values."""
+    import yaml as _yaml
+    from app.database import get_session
+    from app.services import orientation as _orient
+    cdir = settings.paths.channels_dir
+    if not cdir.exists():
+        return
+    session = get_session()
+    try:
+        for path in sorted(cdir.glob("*.yaml")):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    prof = _yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.warning(f"[ChannelSync] skip {path.name}: {e}")
+                continue
+            slug = prof.get("slug") or path.stem
+            gen = prof.get("generation") or {}
+            archetype = prof.get("content_archetype")
+            orient = _orient.normalize(prof.get("orientation")) if prof.get("orientation") else "landscape"
+            row = session.query(Channel).filter(Channel.slug == slug).first()
+            if not row:
+                session.add(Channel(
+                    name=prof.get("name") or slug,
+                    slug=slug,
+                    system_prompt=prof.get("system_prompt", ""),
+                    still_ratio=float(prof.get("still_ratio", 0.4) or 0.4),
+                    target_resolution=str(gen.get("target_resolution", "1080p")),
+                    made_for_kids=bool(prof.get("made_for_kids", False)),
+                    content_archetype=archetype,
+                    orientation=orient,
+                ))
+                logger.info(f"[ChannelSync] created channel row: {slug} "
+                            f"(archetype={archetype}, orientation={orient})")
+            else:
+                changed = False
+                if archetype and not getattr(row, "content_archetype", None):
+                    row.content_archetype = archetype
+                    changed = True
+                if prof.get("orientation") and not getattr(row, "orientation", None):
+                    row.orientation = orient
+                    changed = True
+                if changed:
+                    logger.info(f"[ChannelSync] backfilled {slug}: "
+                                f"archetype={row.content_archetype}, orientation={row.orientation}")
+        session.commit()
+    finally:
+        session.close()
 
 
 # ── Static Files (Web UI) ─────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 name: "Baby Pooem"
 slug: "baby-pooem"
+content_archetype: "kids_poem"   # song lane, character consistency, Tier-1
 language: "English"   # simple toddler-level English; visual prompts always English
 made_for_kids: true
 target_audience: "Babies & toddlers 1-4 + parents (global English) — sing-along animal rhymes by day, sleep aids by night"

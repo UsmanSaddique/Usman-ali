@@ -261,11 +261,21 @@ def build_zimage_workflow(
     seed: int = 42,
     shift: float = 3.0,
     output_prefix: str = "zimage",
+    hires: bool = False,
+    hires_scale: float = 1.5,
+    hires_denoise: float = 0.4,
+    hires_steps: int = 0,
 ) -> dict:
     """Z-Image-Turbo text-to-image (6B, Apache-2.0). Exact recipe from ComfyUI's
     bundled image_z_image_turbo template: UNETLoader + qwen_3_4b (lumina2 CLIP) +
     ae VAE, ModelSamplingAuraFlow shift, res_multistep/simple, 8 steps cfg 1.
-    Negative is a zeroed-out conditioning (turbo needs no real negative)."""
+    Negative is a zeroed-out conditioning (turbo needs no real negative).
+
+    When ``hires`` is set, an "extra effort" two-pass refine runs: the base latent
+    is upscaled ~``hires_scale``x and a second sampler pass at ``hires_denoise``
+    adds real detail (sharper eyes/faces, ornate textures, cleaner edges) — a
+    hires-fix, the same trick the SDXL path uses. ``hires_steps`` (0 = reuse
+    ``steps``) controls the refine pass length."""
     wf = {}
     n = [0]
     def nid():
@@ -287,7 +297,21 @@ def build_zimage_workflow(
         "model": [ms, 0], "positive": [pos, 0], "negative": [zero, 0],
         "latent_image": [lat, 0], "seed": seed, "steps": steps, "cfg": cfg,
         "sampler_name": "res_multistep", "scheduler": "simple", "denoise": 1.0}}
-    dec = nid(); wf[dec] = {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": [vae, 0]}}
+
+    final_latent = [samp, 0]
+    if hires and hires_scale and hires_scale > 1.0:
+        up = nid(); wf[up] = {"class_type": "LatentUpscaleBy", "inputs": {
+            "samples": [samp, 0], "upscale_method": "nearest-exact",
+            "scale_by": float(hires_scale)}}
+        refine = nid(); wf[refine] = {"class_type": "KSampler", "inputs": {
+            "model": [ms, 0], "positive": [pos, 0], "negative": [zero, 0],
+            "latent_image": [up, 0], "seed": seed,
+            "steps": int(hires_steps) or steps, "cfg": cfg,
+            "sampler_name": "res_multistep", "scheduler": "simple",
+            "denoise": float(hires_denoise)}}
+        final_latent = [refine, 0]
+
+    dec = nid(); wf[dec] = {"class_type": "VAEDecode", "inputs": {"samples": final_latent, "vae": [vae, 0]}}
     save = nid(); wf[save] = {"class_type": "SaveImage", "inputs": {
         "images": [dec, 0], "filename_prefix": output_prefix}}
     return wf

@@ -2,6 +2,8 @@ name: "Little Muslim Nation Urdu"
 slug: "little-muslim-nation"
 language: "English"   # switched to English for voiceover; set "Urdu" (native script) or "Roman Urdu" to change
 made_for_kids: true
+storytelling: true    # 2026-07-25: story-poem mode — visuals form ONE continuous story arc
+allow_humans: true    # cartoon Muslim kids are the cast (stylized faces allowed, not photoreal)
 target_audience: "Muslim children 3-9 and their families, Urdu speaking (South Asia + diaspora)"
 inspired_by: "Little Muslim Nation (LMN Urdu) — Islamic stories & values for kids"
 vibe: "Gentle, reverent, warm, uplifting — teaches Islamic manners (akhlaq) and values through soft stories"
@@ -61,7 +63,8 @@ generation:
   default_loras: []
 
 avoid:
-  - "any depiction of prophets, sacred figures, or human faces"
+  - "any depiction of prophets or sacred figures"
+  - "photorealistic / realistic human faces (the cast is stylized 3D cartoon kids — cartoon faces are fine)"
   - "violence, fear, anything disrespectful or restricted-mode risky"
   - "focal rendered text or calligraphy (AI renders it wrong)"
   - "complex multi-character action in a single clip"

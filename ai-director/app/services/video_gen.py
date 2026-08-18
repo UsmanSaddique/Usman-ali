@@ -59,6 +59,7 @@ class VideoGenService:
         model_filename: Optional[str] = None,
         loras: Optional[list[tuple[str, float]]] = None,
         clear_vram_first: bool = True,
+        motion_prompt: Optional[str] = None,
     ) -> VideoResult:
         return self._generate_comfyui(
             mode="txt2vid",
@@ -75,6 +76,7 @@ class VideoGenService:
             model_filename=model_filename,
             loras=loras,
             clear_vram_first=clear_vram_first,
+            motion_prompt=motion_prompt,
         )
 
     def img2vid(
@@ -93,6 +95,7 @@ class VideoGenService:
         model_filename: Optional[str] = None,
         loras: Optional[list[tuple[str, float]]] = None,
         clear_vram_first: bool = True,
+        motion_prompt: Optional[str] = None,
     ) -> VideoResult:
         return self._generate_comfyui(
             mode="img2vid",
@@ -110,6 +113,7 @@ class VideoGenService:
             loras=loras,
             image_path=image_path,
             clear_vram_first=clear_vram_first,
+            motion_prompt=motion_prompt,
         )
 
     def _generate_comfyui(
@@ -129,6 +133,7 @@ class VideoGenService:
         loras: Optional[list[tuple[str, float]]] = None,
         image_path: Optional[str] = None,
         clear_vram_first: bool = True,
+        motion_prompt: Optional[str] = None,
     ) -> VideoResult:
         # Wait for ComfyUI rather than failing instantly — it may still be
         # reloading its CUDA context after the LLM phase released VRAM.
@@ -187,20 +192,28 @@ class VideoGenService:
             img_name = f"i2v_src_{seed}_{Path(image_path).stem}{Path(image_path).suffix or '.png'}"
             shutil.copy2(image_path, comfy_input / img_name)
             logger.info(f"[VideoGen] LTX img2vid from still: {img_name}")
-            # Push the model toward visible MOTION (the still alone yields a near-static
-            # clip). Append dynamic-motion cues and discourage stillness.
-            # Generic motion cues only — do NOT inject scene-specific scenery
-            # (e.g. "grass and leaves swaying" added grass to an indoor party room).
-            motion_prompt = (
-                f"{prompt}, the subject moving and acting with lively dynamic motion, "
-                f"gentle natural movement, subtle camera push-in"
-            )
+            # The video prompt describes MOTION, and it is now DISTINCT from the
+            # still's image prompt. When the planner authored a scene-specific
+            # motion_prompt (what actually happens over the clip), use it — that
+            # is the fix for "the still is just re-fed as the video prompt". Only
+            # when no motion was authored do we fall back to the old generic cue
+            # (image prompt + "moving with lively motion").
+            if motion_prompt and motion_prompt.strip():
+                video_prompt = (
+                    f"{motion_prompt.strip()}, smooth natural motion, "
+                    f"cinematic, the scene comes alive"
+                )
+            else:
+                video_prompt = (
+                    f"{prompt}, the subject moving and acting with lively dynamic motion, "
+                    f"gentle natural movement, subtle camera push-in"
+                )
             motion_negative = (
                 f"{negative_prompt}, static, still image, frozen, motionless, no movement"
             )
             workflow = build_ltx_img2vid_workflow(
                 model_filename=model_filename, image_filename=img_name,
-                prompt=motion_prompt, negative_prompt=motion_negative,
+                prompt=video_prompt, negative_prompt=motion_negative,
                 width=width, height=height, num_frames=num_frames,
                 steps=steps, cfg=cfg_scale, seed=seed, fps=fps,
                 # 0.6 keeps more of the (now hires) still's face/detail than 0.5
@@ -208,9 +221,13 @@ class VideoGenService:
                 strength=getattr(self.config.video, "img2vid_strength", 0.6), loras=loras,
             )
         elif family == "ltx":
+            # txt2vid: no still, so the prompt must carry BOTH the scene and its
+            # motion. Fold the authored motion_prompt in when present.
+            t2v_prompt = (f"{prompt}, {motion_prompt.strip()}"
+                          if motion_prompt and motion_prompt.strip() else prompt)
             workflow = build_ltx_workflow(
                 model_filename=model_filename,
-                prompt=prompt,
+                prompt=t2v_prompt,
                 negative_prompt=negative_prompt,
                 width=width,
                 height=height,

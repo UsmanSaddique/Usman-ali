@@ -1,0 +1,88 @@
+name: "Deen Kids Stories"
+slug: "deen-kids"
+content_archetype: "kids_poem"    # song lane (nasheed), character consistency, Tier-1
+orientation: "landscape"          # 16:9 long-form (like Deen Kids TV)
+language: "English"               # narration/lyrics English; visual prompts always English
+made_for_kids: true
+
+# ── The two things the user wants: a POEM that is also a STORY ────────────────
+storytelling: true                # storyboard director maintains ONE continuous story arc
+allow_humans: true                # the hero is a cartoon Muslim CHILD (faces allowed)
+
+target_audience: "Muslim children 3-9 and their families (global English) — beautiful Islamic story-nasheeds that teach faith and good manners"
+inspired_by: "Deen Kids TV — English: high-quality 3D-animated Islamic nasheeds that tell heart-touching stories (love of Allah, du'as, kindness, honesty, gratitude, salah)"
+vibe: "Warm, reverent, cinematic and joyful — every video is a sung poem (nasheed) that TELLS A STORY with a clear beginning, a gentle lesson, and a heart-warming ending. Think a mini animated movie set to a nasheed."
+
+# ── Format: nasheed that carries a narrative ─────────────────────────────────
+format: "Song-mode ISLAMIC STORY-NASHEED, 2:00-4:00, 16:9. The nasheed lyrics narrate ONE continuous story; the visuals play like a short animated film following the hero child through a small adventure that lands an Islamic value. Sing-along hook repeats, but the STORY always moves forward."
+# This IS the arc the storyboard director follows scene-to-scene (story_mode reads it):
+story_arc:
+  - "SETUP: meet the hero child in their warm little world (home, garden, old-town street with a mosque dome behind); establish who they are and the day ahead"
+  - "SPARK: a small everyday situation opens the theme — a choice, a friend in need, a mistake, a moment to be grateful"
+  - "JOURNEY: the child moves through 3-5 connected beats — trying, forgetting, learning — each scene clearly following the last (cause and effect, time-of-day drifting on)"
+  - "TURN: the gentle lesson lands — a kind elder's smile, a remembered du'a, a change of heart; the emotional peak"
+  - "RESOLUTION: the child practises the good deed and feels its warmth (a hug, a shared meal, a grateful sujood)"
+  - "CLOSING: name the value warmly (shukr / sabr / sachai / kindness) and end on a peaceful, beautiful frame"
+
+# ── Characters: a locked recurring cartoon Muslim child ──────────────────────
+character_system: "ONE hero cartoon Muslim child per video (plus at most one friend or a kind elder). CARTOON 3D, NOT photorealistic. Repeat the hero's EXACT descriptor string in EVERY scene so the child stays identical across the whole story."
+character_bible:
+  - "Adam (boy, 5 yrs): warm 3D Pixar-style cartoon boy, soft brown skin, big kind hazel eyes, short neat black hair under a white knit taqiyah, cream-and-green embroidered kurta, gentle happy smile"
+  - "Hana (girl, 5 yrs): warm 3D Pixar-style cartoon girl, soft brown skin, big bright brown eyes, a neat soft lilac hijab framing round rosy cheeks, modest lilac dress, sweet dimpled smile"
+  - "Dada (kind grandfather): gentle 3D cartoon elder, silver beard, round glasses, warm eyes, white kurta and cap, soft reassuring smile"
+
+# ── Visual identity (premium animated-movie look) ────────────────────────────
+art_style_phrase: "premium 3D animated feature-film look, Pixar/Illumination quality, soft subsurface skin shading, big expressive eyes, rounded gentle features, cinematic depth of field, volumetric warm lighting, richly detailed storybook environments"
+color_palette: "warm golden-hour Islamic storybook palette — honey gold, sky blue, mint and sage green, soft cream, terracotta, gentle rose; sunlit and reverent"
+visual_style:
+  - "Polished 3D animated-MOVIE cartoon — never photorealistic, never realistic adult faces; the child hero is stylized, cute and modest"
+  - "Beautiful Islamic-storybook settings — sunlit old-town lanes, courtyards with arches, gardens, a mosque dome softly behind; props tell the story (a bowl of dates, a prayer mat, a water jug)"
+  - "Warm volumetric daylight, soft god-rays, gentle bokeh, rich texture — make every frame look like a movie still"
+  - "IDENTITY-ONLY REPETITION: repeat ONLY the hero's exact descriptor string (so the child stays identical). EVERYTHING ELSE — background, props, lighting, weather, time of day, camera — MUST be unique to that scene. Never reuse a background layout, camera angle, or action twice."
+
+# ── PROMPT CONSTRUCTION (CRITICAL — this is what makes each frame rich) ────────
+# The #1 quality rule: every `prompt` is a DENSE, SELF-CONTAINED cinematic
+# paragraph — NOT "character + short action + style tail". A weak prompt that
+# only swaps the action is forbidden. Each prompt MUST explicitly contain ALL of:
+prompt_construction_directive: |
+  Write EACH scene `prompt` as a rich, unique cinematic description containing ALL of these, woven into one vivid paragraph (aim 55-90 words):
+  1. CAMERA: a specific, VARIED shot + angle + movement — rotate through the full toolkit across the video and NEVER repeat the previous scene's choice. Draw from: sweeping wide establishing crane shot, low-angle hero shot, high-angle overhead, intimate extreme close-up on the eyes for the emotional turn, over-the-shoulder, tracking/dolly follow, Dutch-tilt for wonder, rack-focus reveal, push-in, worm's-eye through foreground objects.
+  2. HERO: the hero's EXACT locked descriptor string (identity constant) + this scene's precise pose, gesture, and micro-expression (what the eyes and mouth are doing).
+  3. FOREGROUND / MIDGROUND / BACKGROUND: three distinct layers of scene-specific detail — e.g. foreground lantern or fluttering birds, midground the action, background a domed skyline or bustling bazaar. No empty or generic backgrounds ("a sky", "a room" is banned; make it "a honey-lit bazaar of hanging lanterns, spice sacks and arched doorways").
+  4. STORY PROPS: 2-3 concrete props that carry THIS beat (prayer mat, brass water jug, bowl of dates, paper kite, crescent lantern, flock of white doves).
+  5. LIGHTING & ATMOSPHERE unique to this beat: specific source + mood + weather/particles (dawn god-rays through a mashrabiya, warm dusk with drifting dust motes, soft moonlight and fireflies, midday glow with floating petals).
+  6. Then the art_style_phrase as the finishing style tail.
+  Density and variety are mandatory; two scenes that read as near-duplicates are a FAILURE.
+negative_prompt_additions: "photorealistic, realistic adult human, real human photo, uncanny, deformed face, extra limbs, extra fingers, text, letters, arabic calligraphy in frame, watermark, scary, dark, harsh lighting, immodest clothing, blurry, low quality, depiction of the Prophet or sacred figures"
+framing_directive: "VARY THE CAMERA EVERY SCENE — no two consecutive scenes share a shot type or angle. Sweep across the full cinematic toolkit (wide establishing crane, low-angle hero, overhead, extreme close-up on the eyes for the emotional turn, over-the-shoulder, tracking follow, Dutch-tilt, rack-focus, push-in). Reserve the tightest close-ups for the story's emotional TURN; use wides to establish new locations. A repetitive wide/medium/medium-wide cycle is FORBIDDEN."
+still_ratio: 0.0   # every scene is an animated img2vid clip
+scene_type_directive: "Use scene_type 'img2vid' for EVERY scene: a consistent still of THIS story beat, then animated by LTX with a gentle action + ambient motion. Each prompt describes the hero DOING the story action of this lyric line."
+
+# ── Music (nasheed — lyrics drive scenes + story) ────────────────────────────
+music:
+  style: "beautiful children's nasheed, warm clear solo child-friendly vocal, gentle duff hand-drum only (no melodic instruments / vocals-forward halal style), soft backing hums on the hook, uplifting reverent melody, simple repeated sing-along chorus that names the value, warm intimate studio mix, 78 bpm"
+  mood: "warm, reverent, uplifting, tender"
+  note: "Halal-friendly: vocals + light duff percussion only, no melodic instruments; keep the hook simple and repeatable so kids sing along while the verses carry the story."
+
+# ── Titles & SEO ──────────────────────────────────────────────────────────────
+title_formulas:
+  - "'{Value} — Islamic Story Nasheed for Kids | Deen Kids Story 🌙 #islamic #kids #nasheed'"
+  - "'The Story of {theme} | Muslim Kids Nasheed with a Beautiful Lesson #deen #kidsnasheed'"
+seo_themes:
+  - "islamic songs for kids, nasheed for children, muslim kids stories, islamic moral story, deen for kids, good manners islam, gratitude kindness honesty, learn islam kids, bedtime islamic story"
+
+# ── Local-AI generation presets ───────────────────────────────────────────────
+generation:
+  target_resolution: "1080p"
+  clip_seconds: [5, 6]     # let each story beat breathe
+  prefer: "img2vid for every scene; lock seed per project for a consistent cast"
+  video_model: "LTX-2.3-22B-distilled-1.1-Q3_K_S.gguf"
+  default_loras: []
+
+avoid:
+  - "ANY depiction of the Prophet ﷺ, sahaba, or sacred figures (never show them)"
+  - "photorealistic or realistic adult human faces (hero is a stylized cartoon child)"
+  - "focal rendered text or Arabic calligraphy in the frame (AI renders it wrong)"
+  - "violence, fear, anything disrespectful or restricted-mode risky"
+  - "disconnected 'pretty clip' scenes — every scene must advance the ONE story"
+  - "immodest clothing; keep all characters modest"

@@ -56,7 +56,9 @@ public sealed record CreateProjectRequest(
     string Title, string ChannelId, int DurationTarget,
     string ProjectType = "song", string? Context = null, string? Lyrics = null);
 
-public sealed record ChannelSummary(string Id, string Name, string Slug, bool MadeForKids)
+public sealed record ChannelSummary(
+    string Id, string Name, string Slug, bool MadeForKids, string? ContentArchetype)
 {
-    public static ChannelSummary From(Channel c) => new(c.Id, c.Name, c.Slug, c.MadeForKids);
+    public static ChannelSummary From(Channel c) =>
+        new(c.Id, c.Name, c.Slug, c.MadeForKids, c.ContentArchetype);
 }

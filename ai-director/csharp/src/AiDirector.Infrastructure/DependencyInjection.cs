@@ -1,5 +1,7 @@
 using AiDirector.Application.Abstractions;
+using AiDirector.Application.Archetypes;
 using AiDirector.Application.Configuration;
+using AiDirector.Infrastructure.Archetypes;
 using AiDirector.Infrastructure.Audio;
 using AiDirector.Infrastructure.ComfyUi;
 using AiDirector.Infrastructure.Media;
@@ -34,6 +36,10 @@ public static class DependencyInjection
         services.AddScoped<ILtxDirectorEngine, LtxDirectorEngine>();
         services.AddSingleton<IMediaRunner, MediaRunner>();
         services.AddScoped<IProjectRepository, ProjectRepository>();
+
+        // Content archetypes: registry (cached YAML) + pure resolver.
+        services.AddSingleton<IArchetypeRegistry, YamlArchetypeRegistry>();
+        services.AddSingleton<ArchetypeResolver>();
 
         // Concrete services (injected directly into endpoints/pipeline).
         services.AddScoped<Assembler>();

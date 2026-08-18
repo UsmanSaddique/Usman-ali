@@ -400,35 +400,98 @@ Generate the full object now with all {num_scenes} scenes inside the "scenes" ar
             pass
         llm = self.manager.load(ModelType.LLM).model
 
+        # ── Story mode (opt-in per channel) ──────────────────────────────
+        # Channels like the Deen-kids story-nasheeds want the poem to ALSO tell
+        # a continuous STORY (setup → journey → lesson → resolution) instead of a
+        # loop of pretty-but-disconnected clips. When the profile opts in, the
+        # storyboard director is told to maintain narrative continuity across
+        # scenes: same character grows through the song, each scene follows from
+        # the last (cause→effect, time/place progress), and the final scenes land
+        # the lesson. Non-story channels keep the original distinct-clip behavior.
+        story_on = bool(profile.get("storytelling") or profile.get("story_mode")
+                        or str(profile.get("narrative_mode", "")).lower() in ("story", "story_poem"))
+        arc = profile.get("story_arc") or profile.get("episode_structure")
+        if isinstance(arc, list):
+            arc = "\n".join(f"  {i+1}. {a}" for i, a in enumerate(arc))
+
+        if story_on:
+            story_block = (
+                "\n\nSTORY MODE — THIS IS A STORY-POEM, NOT A CLIP LOOP (most important rule):\n"
+                "- The whole video tells ONE continuous story that the poem/nasheed narrates. "
+                "The scenes, IN ORDER, must play like a short film with a clear arc: "
+                "SETUP (introduce the character + their little world) → JOURNEY (something "
+                "happens, a small problem, choice or adventure that PROGRESSES scene to scene) "
+                "→ TURN (the lesson/feeling lands) → RESOLUTION (a warm, satisfying close).\n"
+                "- CONTINUITY IS MANDATORY: each scene must clearly FOLLOW ON from the previous "
+                "one — the SAME character, evolving location, time-of-day and situation. Cause "
+                "and effect: what the character did last scene shapes this one. The viewer must "
+                "feel a single connected journey, never a random slideshow.\n"
+                "- Still depict the literal meaning of each lyric line, but frame it as THIS "
+                "beat of the ongoing story (who is where, having just done what, feeling what).\n"
+                "- Land the emotional/faith lesson visually in the final scenes (a kind act, a "
+                "grateful du'a, a hug, a peaceful sleep) so the ending pays off the journey.\n"
+                + (f"- Follow this story arc across the scenes:\n{arc}\n" if arc else "")
+            )
+        else:
+            story_block = ""
+
+        distinct_rule = (
+            "- Each scene is THIS beat of the continuous story and must move it forward — vary "
+            "pose, action beat and framing; never repeat a description.\n"
+            if story_on else
+            "- Is visually DISTINCT from every other scene — vary the pose, the exact beat of "
+            "the action, and the framing. No two descriptions may repeat.\n"
+        )
+
+        # Some channels (animal / object channels) forbid human faces; story
+        # channels with a human child protagonist (Deen-kids nasheeds) need them.
+        allow_humans = bool(profile.get("allow_humans") or profile.get("human_characters"))
+        faces_rule = (
+            "- Child-safe, warm and cute. Human characters ARE allowed (this channel's hero is "
+            "a person); render friendly, modest, expressive faces. No readable text/letters/"
+            "numbers, no watermark.\n"
+            if allow_humans else
+            "- Has NO readable text/letters/numbers in the image, no watermark, no human faces; "
+            "child-safe, warm and cute.\n"
+        )
+
         sys_prompt = (
             "You are an ELITE visual director and storyboard artist for a children's "
             "animated MUSIC VIDEO. You are given (A) a CONTEXT that LOCKS the exact "
             "character(s), setting and art style, and (B) the song's lyric lines in order.\n\n"
             "For EVERY lyric line, write ONE concrete visual scene description that:\n"
             "- Shows the EXACT locked character(s) from the CONTEXT — same species, colours "
-            "and signature props. NEVER a human child, NEVER a different animal, NEVER a "
-            "generic character.\n"
-            "- Takes place in the SETTING named in the CONTEXT (do not invent unrelated "
-            "locations like libraries, mosques, meadows, riverbanks).\n"
+            "and signature props. NEVER a different or generic character.\n"
+            "- Takes place in the SETTING named in the CONTEXT (or a place the ongoing story "
+            "has moved to) — do not teleport to random unrelated locations.\n"
             "- DEPICTS THE LITERAL ACTION / MEANING OF THAT LYRIC LINE so the sung moment is "
             "clearly visible. If the line is 'brush your teeth', the character is actively "
-            "brushing its teeth with its toothbrush; 'show your smile' = it opens wide showing "
-            "teeth; 'rinse and spit' = it sips from the cup at the sink. Translate poetic lines "
-            "into a concrete visible action.\n"
-            "- Is visually DISTINCT from every other scene — vary the pose, the exact beat of "
-            "the action, and the framing. No two descriptions may repeat.\n"
+            "brushing its teeth; 'share your food' = it hands food to a friend. Translate "
+            "poetic lines into a concrete visible action.\n"
+            f"{distinct_rule}"
             "- Is 25-55 words, concrete and physical (who + exact action + a couple of setting/"
             "light details). ENGLISH only.\n"
-            "- Has NO readable text/letters/numbers in the image, no watermark, no human faces; "
-            "toddler-safe, warm and cute. Do NOT include camera or shot-size jargon — only "
-            "describe what happens in the frame.\n\n"
-            f'Respond with ONLY JSON: {{"scenes":[{{"n":1,"desc":"..."}}, ... exactly {n} '
-            'objects, one per lyric line, same order]}.'
+            f"{faces_rule}"
+            "- Do NOT include camera or shot-size jargon — only describe what happens in the "
+            "frame.\n"
+            "\nFor EACH scene give TWO separate fields:\n"
+            "- \"desc\": the STILL — the OPENING FRAME composition (who/what is in frame, where, "
+            "the pose and setting at the START of the clip). This becomes the generated image.\n"
+            "- \"motion\": what MOVES and HAPPENS across the ~5s clip — the action the character "
+            "performs, how they move, and gentle ambient motion. Describe motion only, 10-25 "
+            "words (e.g. 'the boy kneels and gently pours water over the plant, leaves sway "
+            "softly, light flickers'). This drives the video, separate from the still.\n"
+            f"{story_block}\n"
+            f'Respond with ONLY JSON: {{"scenes":[{{"n":1,"desc":"...","motion":"..."}}, ... '
+            f'exactly {n} objects, one per lyric line, same order]}}.'
         )
         user_msg = (
             f"CONTEXT (locked characters / setting / style — obey exactly):\n{context}\n\n"
             f"SONG TITLE: {title}\n\n"
-            f"LYRIC LINES — write one matching scene for each, in order ({n} total):\n"
+            + ("This song TELLS A STORY. Read all the lyric lines first, decide the single "
+               "story they tell start-to-finish, then storyboard each line as the next beat "
+               "of that one story.\n\n" if story_on else "")
+            + f"LYRIC LINES — write one matching scene for each, in order ({n} total):\n"
             f"{lines_block}\n"
         )
 
@@ -448,9 +511,14 @@ Generate the full object now with all {num_scenes} scenes inside the "scenes" ar
             data = self._salvage_truncated(self._clean_json(raw))
         items = data.get("scenes") or data.get("enhanced") or []
         by_n = {}
+        motion_by_n = {}
         for it in items:
             try:
-                by_n[int(it.get("n"))] = str(it.get("desc", "")).strip()
+                idx = int(it.get("n"))
+                by_n[idx] = str(it.get("desc", "")).strip()
+                mv = str(it.get("motion", "") or "").strip()
+                if mv:
+                    motion_by_n[idx] = mv
             except (TypeError, ValueError):
                 continue
 
@@ -471,9 +539,19 @@ Generate the full object now with all {num_scenes} scenes inside the "scenes" ar
                     f"clean frame without any text, captions, titles or watermarks, "
                     f"camera: {guidance['camera']}, {guidance['lighting']}, "
                     f"{guidance['mood']} mood, {guidance['composition']}")
+            # Authored MOTION for this scene (what moves over the clip), kept
+            # separate from the still's image prompt. Falls back to the lyric
+            # action so the video is never just the still re-fed.
+            motion = motion_by_n.get(seg.index + 1, "").strip()
+            if not motion:
+                lyric = (getattr(seg, "text", "") or "").strip()
+                motion = (f"the character gently performs the action of \"{lyric}\", "
+                          f"soft natural movement, gentle ambient motion") if lyric else \
+                         "gentle natural movement, soft ambient motion"
             prompts.append({
                 "segment_index": seg.index,
                 "prompt": full,
+                "motion_prompt": motion,
                 "negative_prompt": neg,
                 "camera_motion": ["static", "zoom_in", "pan_left", "pan_right",
                                   "static", "zoom_in"][seg.index % 6],

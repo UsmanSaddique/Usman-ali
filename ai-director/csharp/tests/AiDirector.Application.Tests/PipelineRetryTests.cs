@@ -55,8 +55,17 @@ public sealed class PipelineRetryTests
             .Returns(ci => ci.Arg<string>());
     }
 
+    // Empty archetype registry → resolver returns the legacy recipe (not
+    // blocked, no required review), so RunAsync proceeds exactly as before.
+    private sealed class EmptyRegistry : AiDirector.Application.Archetypes.IArchetypeRegistry
+    {
+        public IReadOnlyDictionary<string, AiDirector.Application.Archetypes.ContentArchetype> All() => new Dictionary<string, AiDirector.Application.Archetypes.ContentArchetype>();
+        public AiDirector.Application.Archetypes.ContentArchetype? Get(string? id) => null;
+    }
+
     private PipelineOrchestrator Orchestrator() => new(
         _repo, _comfy, _workflows, _ltx, _notifier,
+        new AiDirector.Application.Archetypes.ArchetypeResolver(new EmptyRegistry()),
         Options.Create(new AiDirectorOptions()),
         NullLogger<PipelineOrchestrator>.Instance);
 

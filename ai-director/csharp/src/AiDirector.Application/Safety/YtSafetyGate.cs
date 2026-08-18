@@ -51,10 +51,30 @@ public sealed class YtSafetyGate
         "originally performed by", "cover of the song",
     ];
 
-    public GateResult Run(Project project, IReadOnlyList<Scene> scenes, bool madeForKids)
+    public GateResult Run(Project project, IReadOnlyList<Scene> scenes, bool madeForKids,
+        IReadOnlyList<string>? ipDenylist = null)
     {
         var fields = Collect(project, scenes);
         var issues = new List<SafetyIssue>();
+
+        // Archetype IP deny-list (e.g. "bheem"): a hit is a hard BLOCK — copyrighted
+        // characters/brands are a monetization risk. Parity with _scan_ip_denylist.
+        if (ipDenylist is { Count: > 0 })
+            foreach (var term in ipDenylist)
+            {
+                if (string.IsNullOrWhiteSpace(term)) continue;
+                foreach (var (where, text) in fields)
+                {
+                    if (!string.IsNullOrEmpty(text) &&
+                        Regex.IsMatch(text!, $@"\b{Regex.Escape(term.Trim())}\b", RegexOptions.IgnoreCase))
+                    {
+                        issues.Add(new("block", "copyright", where,
+                            $"Copyrighted IP '{term.Trim()}' found in {where}.",
+                            $"Remove '{term.Trim()}' and use an original character/name."));
+                        break;
+                    }
+                }
+            }
 
         foreach (var (where, text) in fields)
         {

@@ -1,0 +1,27 @@
+id: faith_kids
+tier: 2
+label: "Faith / Cultural kids content"
+enabled: true
+
+# Religious/cultural content needs human tact. Tier 2 => required review +
+# strict gate. The strict gate also runs an IP deny-list (e.g. "Bheem" is a
+# copyrighted IP — monetization risk) — see Phase 2.
+audio_mode: song
+video_engine: clips
+visual_mode: character_panels
+character_consistency: true
+scene_planner: lyric_scenes
+source: llm
+
+hitl:
+  script_review: required
+  safety_gate: strict
+
+seo_profile: kids
+
+# Deny-list surfaced to the strict safety gate (Phase 2 wires this in).
+ip_denylist:
+  - "bheem"
+  - "chhota bheem"
+  - "little singham"
+  - "motu patlu"

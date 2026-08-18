@@ -1,0 +1,20 @@
+id: edu_facts
+tier: 2
+label: "Facts / Health / Baby-diet (educational)"
+enabled: true
+
+# LLMs hallucinate facts and medical claims. Tier 2 => script_review REQUIRED:
+# the pipeline hard-stops after the script for a human to verify before any
+# audio/video is generated. Safety gate runs strict (LLM critic).
+audio_mode: narration
+video_engine: clips
+visual_mode: voice_over_bg
+character_consistency: false
+scene_planner: narration_scenes
+source: llm
+
+hitl:
+  script_review: required
+  safety_gate: strict
+
+seo_profile: default

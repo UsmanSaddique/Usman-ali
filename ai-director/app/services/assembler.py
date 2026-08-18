@@ -49,6 +49,7 @@ class AssemblerService:
         transition_duration: float = 0.5,
         resolution: str = "1080p",
         fps: int = 24,
+        orientation: str = "landscape",
     ) -> AssemblyResult:
         """
         Assemble all clips into a final video with audio mixing.
@@ -58,19 +59,15 @@ class AssemblerService:
         2. Concatenate all clips with crossfade transitions
         3. Mix narration + music audio tracks
         4. Mux video + mixed audio
+
+        `orientation` sets the final canvas aspect (landscape 16:9 / vertical
+        9:16 shorts-reels / square 1:1) for the given resolution label.
         """
         t0 = time.time()
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        res_map = {
-            "1080p": (1920, 1080),
-            "2k": (2560, 1440),
-            "1440p": (2560, 1440),
-            "4k": (3840, 2160),
-            "2160p": (3840, 2160),
-            "720p": (1280, 720),
-        }
-        target_w, target_h = res_map.get(resolution, (1920, 1080))
+        from app.services import orientation as _orient
+        target_w, target_h = _orient.target_dims(orientation, resolution)
 
         if len(clips) == 0:
             raise ValueError("No clips to assemble")
@@ -133,6 +130,7 @@ class AssemblerService:
         music_db: float = -21.0,   # music bed level before ducking
         sfx_db: float = -12.0,
         target_lufs: float = -14.0,  # YouTube normalization target
+        orientation: str = "landscape",
     ) -> AssemblyResult:
         """
         Narration-mode assembly. The VO track is the master clock:
@@ -146,11 +144,8 @@ class AssemblerService:
         """
         t0 = time.time()
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        res_map = {
-            "1080p": (1920, 1080), "2k": (2560, 1440), "1440p": (2560, 1440),
-            "4k": (3840, 2160), "2160p": (3840, 2160), "720p": (1280, 720),
-        }
-        w, h = res_map.get(resolution, (1920, 1080))
+        from app.services import orientation as _orient
+        w, h = _orient.target_dims(orientation, resolution)
         if not blocks:
             raise ValueError("No clips to assemble")
 

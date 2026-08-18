@@ -1,0 +1,22 @@
+id: reddit_story
+tier: 1
+label: "Reddit Stories"
+enabled: true
+
+# Scrape top threads -> LLM formats -> Kokoro narration over a LOOPING
+# background clip (not per-scene generation). Needs the scraper + bg-loop
+# assembler (Phase 4).
+audio_mode: narration
+video_engine: clips
+visual_mode: reddit_broll
+character_consistency: false
+scene_planner: narration_scenes
+source: scrape
+
+hitl:
+  # Scraped third-party text: keep a standard gate but review is optional
+  # (the safety gate still scans the formatted narration + SEO).
+  script_review: optional
+  safety_gate: standard
+
+seo_profile: default

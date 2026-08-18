@@ -1,0 +1,30 @@
+id: asmr_ambient
+tier: 1
+label: "ASMR / Satisfying ambient loop"
+enabled: true
+
+# The *AI-satisfying* ASMR lane (Tier-1, automatable) — as opposed to REAL
+# footage ASMR (a real camera filming a real knife on a real cake), which the
+# brief marks as the Tier-3 `authenticity_trap`. Everything here is AI-rendered
+# stylized satisfying content: macro "oddly satisfying" motion AND the viral
+# "Is It Cake?" illusion (two look-alike objects, a slow knife slice revealing
+# cake sponge inside). The specific concept — abstract loop vs is-it-cake reveal
+# — is set per channel (see the channel YAML's visual_direction). Ambient audio:
+# soundscape/music bed + slice/whoosh SFX, never a spoken voice.
+audio_mode: ambient            # instrumental/soundscape bed only — NO voice, NO lyrics
+video_engine: clips            # per-scene img2vid loops (verified lane); flip to ltx_director for native motion
+orientation: vertical          # Shorts/Reels 9:16 by default (this niche lives on Shorts/TikTok)
+visual_mode: surreal_loop
+character_consistency: false   # the texture/motion is the product, not a recurring character
+scene_planner: freeform
+source: llm
+# ASMR wants LONG, slow, satisfying clips. 121 frames @ 12fps ≈ 10s per clip
+# (vs ~5s at 24fps) — same VRAM cost, lower frame-rate is fine for slow motion.
+clip_seconds: 10
+clip_fps: 12
+
+hitl:
+  script_review: optional
+  safety_gate: standard
+
+seo_profile: ambient

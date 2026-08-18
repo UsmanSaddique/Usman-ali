@@ -1,0 +1,25 @@
+id: authenticity_trap
+tier: 3
+label: "Authenticity Trap (DO NOT AUTOMATE)"
+enabled: false
+
+# Catch-all for the Tier-3 niches from the brief: satisfying real pets, luxury
+# cars/tech, sports legend moments, WWE/UFC/F1, ASMR candy/toys/dolls, dancing
+# babies. These rely on real-world physics, real footage, brand accuracy, or
+# human authenticity that local AI generation cannot fake without hitting the
+# uncanny valley or copyright/monetization risk.
+#
+# A channel that references this (or any enabled:false / tier:3 archetype) is
+# REFUSED at start-generation with an explanatory message. Do not "just try it".
+audio_mode: narration
+video_engine: clips
+visual_mode: voice_over_bg
+character_consistency: false
+scene_planner: narration_scenes
+source: llm
+
+hitl:
+  script_review: blocked
+  safety_gate: blocked
+
+seo_profile: default

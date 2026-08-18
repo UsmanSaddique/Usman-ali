@@ -42,6 +42,7 @@ public sealed class PathsOptions
     public string AssetsDir { get; set; } = "assets_generated";
     public string ProjectsDir { get; set; } = "projects";
     public string ChannelsDir { get; set; } = "channels";
+    public string ArchetypesDir { get; set; } = "archetypes";
     public string Database { get; set; } = "ai_director.db";
     public string FfmpegBin { get; set; } = "ffmpeg";
     public string FfprobeBin { get; set; } = "ffprobe";

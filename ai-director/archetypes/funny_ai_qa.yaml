@@ -1,0 +1,19 @@
+id: funny_ai_qa
+tier: 1
+label: "Asking AI / Funny AI Q&A"
+enabled: true
+
+# The absurdity/glitchiness is the selling point. LLM writes Q&A pairs, the
+# image model goes deliberately wild. Narration reads the Q + A.
+audio_mode: narration
+video_engine: clips
+visual_mode: surreal_loop
+character_consistency: false
+scene_planner: qa_pairs           # NEW planner (Phase 5)
+source: llm
+
+hitl:
+  script_review: optional
+  safety_gate: standard
+
+seo_profile: default

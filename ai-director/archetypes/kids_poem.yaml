@@ -1,0 +1,19 @@
+id: kids_poem
+tier: 1
+label: "Kids Poem / Animal Story (song)"
+enabled: true
+
+# Lyrics drive the vocals AND the scene timing. This is what baby-pooem and the
+# other kids channels already do — the archetype just makes it explicit.
+audio_mode: song
+video_engine: clips
+visual_mode: character_panels
+character_consistency: true      # lock the hero's descriptor string every scene
+scene_planner: lyric_scenes
+source: llm
+
+hitl:
+  script_review: optional
+  safety_gate: standard
+
+seo_profile: kids

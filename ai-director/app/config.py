@@ -36,13 +36,14 @@ class PathConfig(BaseModel):
     projects_dir: Path = Path(__file__).parent.parent / "projects"
     database: Path = Path(__file__).parent.parent / "ai_director.db"
     channels_dir: Path = Path(__file__).parent.parent / "channels"
+    archetypes_dir: Path = Path(__file__).parent.parent / "archetypes"
     loras_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\loras")
     text_encoders_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\text_encoders")
     vae_dir: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\vae")
     ffmpeg_bin: str = _resolve_ffmpeg()  # auto-detected: PATH or bundled imageio_ffmpeg
 
     def ensure_dirs(self):
-        for d in [self.base_dir, self.models_dir, self.assets_dir, self.projects_dir, self.channels_dir, self.loras_dir]:
+        for d in [self.base_dir, self.models_dir, self.assets_dir, self.projects_dir, self.channels_dir, self.archetypes_dir, self.loras_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -79,9 +80,39 @@ class ImageModelConfig(BaseModel):
     fidelity — correct taqiyah/kurta, consistent faces, clean 3D render."""
     engine: str = "zimage"       # "zimage" (best character fidelity) or "sdxl"
     zimage_unet: str = "z_image_turbo_bf16.safetensors"
-    zimage_steps: int = 9
+    # Quality bump 2026-07-25 (user: "images are not good"): more steps + a higher
+    # still floor. Z-Image-Turbo stays fast even at 12 steps; the crisper, larger
+    # still is what seeds img2vid and is supersampled into the final frame, so
+    # sharper stills = sharper video. 960 floor keeps us near the ~1MP budget.
+    zimage_steps: int = 12       # was 9 — sharper faces/edges, still quick on Turbo
     zimage_shift: float = 3.0
-    zimage_min_height: int = 720  # floor still height near Z-Image's native ~1MP budget
+    zimage_min_height: int = 960  # was 720 — bigger, crisper still seed for img2vid
+    # "Extra effort" 2026-08-04 (user: match Deen Kids TV / Cocomelon polish): a
+    # two-pass hires-fix refine on the Z-Image still. Pass 1 renders the base,
+    # then the latent is upscaled ~1.4x and a low-denoise second pass paints in
+    # real detail (glossy eyes, ornate textures, crisp edges) instead of just
+    # interpolating pixels. Keeps well within 16GB at 960-floor base * 1.4.
+    zimage_hires: bool = False   # OFF 2026-08-04 (user: 2nd-pass upscale spilled VRAM,
+                                 # ~2x still time + RAM overflow). The style suffix is the
+                                 # real quality win (realistic->cartoon); the refine pass
+                                 # only added cost. Single-pass 1696x960 is clean + fast (~46s)
+                                 # and still supersamples into the 832x480 clip.
+    zimage_hires_scale: float = 1.4
+    zimage_hires_denoise: float = 0.4   # low = keep composition, add detail
+    zimage_hires_steps: int = 10        # refine pass length (Turbo stays fast)
+    # Compulsory style suffix appended to every still prompt so the render lands
+    # the target children's-3D look (glossy Pixar/Cocomelon) regardless of what
+    # the director LLM wrote. Density/variety come from the director; this locks
+    # the *finish*. See feedback-visual-director-master-prompt.
+    quality_suffix: str = (
+        "glossy Pixar-style 3D animation render, adorable character with big "
+        "expressive glossy eyes, soft rounded features, ultra-detailed ornate "
+        "textures, warm volumetric golden-hour lighting, soft rim light, "
+        "cinematic depth of field, dreamy bokeh sparkles, vibrant saturated "
+        "colors, smooth soft shadows, subsurface scattering skin, polished "
+        "high-gloss surfaces, extremely detailed, crisp focus, 8k, masterpiece, "
+        "professional children's animation studio quality"
+    )
     name: str = "sdxl-base-1.0"
     path: Path = Path(r"C:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\models\checkpoints\sd_xl_base_1.0.safetensors")
     dtype: str = "float16"       # float16 or bfloat16
@@ -144,10 +175,14 @@ class VideoModelConfig(BaseModel):
     # Benched 2026-07-15 (121f img2vid, LTX-22B, 16GB): 832x480@8 = 46s,
     # 960x544@8 = 55s, 960x544@16 = 88s (VRAM-safe), 1024x576 SPILLS = 574s.
     # 960x544@16 is the sweet spot: +33% pixels, 2x sampling, ~1.5min/clip.
-    premium_open_seconds: float = 20.0
-    premium_width: int = 960
+    # Quality bump 2026-07-25: widen the premium window (more of the video gets
+    # the hi-res hook treatment) and a couple more steps. 960x544@18 stays
+    # VRAM-safe on 16GB (benched 960x544@16 = 88s/clip). Deliberately slower —
+    # the user asked for more quality/effort over speed.
+    premium_open_seconds: float = 35.0   # was 20 — more early scenes render hi-res
+    premium_width: int = 960             # (landscape ref; actual dims now orientation-driven)
     premium_height: int = 544
-    premium_steps: int = 16   # distilled LTX default is 8
+    premium_steps: int = 18   # was 16 (distilled LTX default is 8)
 
 
 class VideoModelAltConfig(BaseModel):

@@ -8,7 +8,9 @@ public class Project
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Title { get; set; } = null!;
     public string ChannelId { get; set; } = null!;
-    public string ProjectType { get; set; } = "song";        // "song" | "narration"
+    public string ProjectType { get; set; } = "song";        // "song" | "narration" (lane; chosen by archetype)
+    public string? ContentArchetype { get; set; }            // archetype id override; null=inherit channel
+    public bool Reviewed { get; set; }                       // human script sign-off (Tier-2 gate); only the approve endpoint sets it
     public int DurationTarget { get; set; }                  // seconds
 
     public string? Context { get; set; }                     // user-provided notes

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AiDirector.Application.Abstractions;
+using AiDirector.Application.Archetypes;
 using AiDirector.Application.Configuration;
 using AiDirector.Application.Directing;
 using AiDirector.Domain.Entities;
@@ -23,6 +24,7 @@ public sealed class PipelineOrchestrator(
     IWorkflowBuilder workflows,
     ILtxDirectorEngine ltxDirector,
     IProgressNotifier progress,
+    ArchetypeResolver archetypes,
     IOptions<AiDirectorOptions> options,
     ILogger<PipelineOrchestrator> log)
 {
@@ -32,6 +34,21 @@ public sealed class PipelineOrchestrator(
     {
         var project = await projects.GetAsync(projectId, includeGraph: true, ct);
         if (project is null) { log.LogWarning("Pipeline: project {Id} not found", projectId); return; }
+
+        // Content Archetype gate — the single GPU choke point (parity with
+        // pipeline.ensure_safety → ensure_archetype_allowed / ensure_script_review).
+        var recipe = archetypes.Resolve(project, project.Channel);
+        if (recipe.IsBlocked)
+        {
+            await Fail(project, $"Archetype blocked: {recipe.BlockReason()}");
+            return;
+        }
+        if (recipe.ScriptReview == "required" && !project.Reviewed)
+        {
+            await Fail(project, $"Human review REQUIRED for archetype '{recipe.ArchetypeId}' " +
+                $"(Tier {recipe.Tier}) — verify the script and approve before generating.");
+            return;
+        }
 
         await Notify(projectId, "startup", "running", 0, "Ensuring ComfyUI is up");
         if (!await comfy.WaitReadyAsync(_o.ComfyUi.ColdStartTimeoutSec, _o.ComfyUi.AutoLaunch, ct))
@@ -43,7 +60,10 @@ public sealed class PipelineOrchestrator(
         project.Status = ProjectStatus.Generating;
         await projects.SaveAsync(ct);
 
-        if (project.VideoEngine == "ltx_director")
+        // The archetype's engine is authoritative when one is set (e.g.
+        // ai_dreamscape forces ltx_director); otherwise the project's field.
+        var engine = recipe.ArchetypeId is not null ? recipe.VideoEngine : project.VideoEngine;
+        if (engine == "ltx_director")
         {
             // Routing parity with pipeline.py: ltx_director projects render as
             // one long multi-director video instead of clip-by-clip.
